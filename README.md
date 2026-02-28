@@ -10,9 +10,9 @@ Almost identical to Claude Code's built-in `/usage` screen:
 
 ### Full mode (default)
 
-Adds pace bars (elapsed time comparison) and profile info:
+Adds pace bars (elapsed time comparison) and profile info. Supports monitoring multiple profiles simultaneously:
 
-![full](docs/screen-shot.png)
+![full](docs/default.png)
 
 ## Quick Start
 
