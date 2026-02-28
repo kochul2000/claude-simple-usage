@@ -47,7 +47,7 @@ python3 ccu.py install
 You can bake in preset flags:
 
 ```bash
-python3 ccu.py install --no-pace --config-dir ~/.claude-personal
+python3 ccu.py install --no-pace -d ~/.claude-personal
 ```
 
 This generates a wrapper script in `~/.local/bin/ccu` with your flags built in. You can still pass additional flags at runtime. To remove:
@@ -68,7 +68,8 @@ Make sure `~/.local/bin` is in your `PATH`.
 ```bash
 ccu                            # refresh every 30s (default)
 ccu 15                         # refresh every 15s
-ccu --config-dir ~/.claude     # use specific config directory
+ccu -d ~/.claude               # use specific config directory
+ccu --config-dir ~/.claude     # (same, long form)
 ccu --no-pace                  # start with pace bar hidden
 ccu --no-profile               # start with profile info hidden
 ccu --once                     # fetch once and exit

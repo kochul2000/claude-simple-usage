@@ -8,7 +8,8 @@ and displays server-side usage data in real time.
 Usage:
     ccu                          # refresh every 30s (default)
     ccu 15                       # refresh every 15s
-    ccu --config-dir ~/.claude   # use specific config directory
+    ccu -d ~/.claude             # use specific config directory
+    ccu --config-dir ~/.claude   # (same, long form)
     ccu --no-pace                # start with pace bar hidden
     ccu --no-profile             # start with profile info hidden
     ccu --debug                  # show raw tmux output
@@ -630,9 +631,9 @@ def main():
         elif arg == "--help" or arg == "-h":
             print(__doc__)
             sys.exit(0)
-        elif arg == "--config-dir":
+        elif arg in ("--config-dir", "-d"):
             if i + 1 >= len(args):
-                print("\033[31m--config-dir requires a path argument\033[0m")
+                print(f"\033[31m{arg} requires a path argument\033[0m")
                 sys.exit(1)
             i += 1
             CONFIG_DIR = os.path.expanduser(args[i])
