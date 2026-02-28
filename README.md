@@ -19,10 +19,19 @@ Real-time Claude Code usage monitor. Runs `/usage` in a hidden tmux session and 
   Refresh: 30s · Next in 25s
 ```
 
-## Install
+## Quick Start
 
 ```bash
-pip install claude-simple-usage
+# Download and run
+curl -sO https://raw.githubusercontent.com/kochul2000/claude-simple-usage/master/ccu.py
+python3 ccu.py
+```
+
+Or install as a command:
+
+```bash
+pip install git+https://github.com/kochul2000/claude-simple-usage.git
+ccu
 ```
 
 ## Requirements
