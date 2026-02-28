@@ -2,22 +2,7 @@
 
 Real-time Claude Code usage monitor. Runs `/usage` in a hidden tmux session and displays accurate server-side data.
 
-```
-  Claude Code Usage Monitor                 21:06:30
-
-  Current Session
-  █████████████████████░░░░░░░░░░░░░░░░░░░  53% used
-  Resets 10pm (Asia/Seoul)
-
-  Current Week (All Models)
-  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  13% used
-  Resets Mar 6, 12pm (Asia/Seoul)
-
-  Current Week (Sonnet Only)
-  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0% used
-
-  Refresh: 30s · Next in 25s
-```
+![screenshot](screen-shot.png)
 
 ## Quick Start
 
@@ -41,6 +26,14 @@ curl -sO https://raw.githubusercontent.com/kochul2000/claude-simple-usage/master
 python3 ccu.py
 ```
 
+To install `ccu` as a command:
+
+```bash
+python3 ccu.py install
+```
+
+This creates a symlink in `~/.local/bin`. Make sure it's in your `PATH`.
+
 ## Requirements
 
 - **tmux** — `brew install tmux` / `sudo apt install tmux`
@@ -49,10 +42,12 @@ python3 ccu.py
 ## Usage
 
 ```bash
-ccu              # refresh every 30s (default)
-ccu 15           # refresh every 15s
-ccu --once       # fetch once and exit
-ccu --debug      # show raw tmux output
+ccu                            # refresh every 30s (default)
+ccu 15                         # refresh every 15s
+ccu --config-dir ~/.claude     # use specific config directory
+ccu --once                     # fetch once and exit
+ccu --debug                    # show raw tmux output
+ccu install                    # install ccu to ~/.local/bin
 ```
 
 ## Keys
@@ -60,8 +55,11 @@ ccu --debug      # show raw tmux output
 | Key | Action |
 |---|---|
 | `r` | Immediate refresh |
-| `w` / `s` | Adjust refresh interval ±5s (3s–120s) |
-| `a` / `d` | Adjust bar width ±5 (15–80) |
+| `w` / `s` | Adjust refresh interval (w=+5s, s=-5s, 3s–120s) |
+| `a` / `d` | Adjust bar width (a=-5, d=+5) |
+| `e` | Toggle pace bar (elapsed time comparison) |
+| `q` | Toggle profile info |
+| `h` / `ESC` | Toggle help |
 | `Ctrl+C` | Exit |
 
 ## How it works
@@ -69,7 +67,7 @@ ccu --debug      # show raw tmux output
 1. Starts Claude Code in a hidden tmux session
 2. Sends `/usage` command periodically
 3. Parses the TUI output for usage percentages and reset times
-4. Displays a clean dashboard with color-coded progress bars
+4. Displays a clean dashboard with progress bars and pace comparison
 
 ## License
 

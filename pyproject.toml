@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-simple-usage"
-version = "0.1.0"
+version = "0.2.0"
 description = "Real-time Claude Code usage monitor via tmux"
 readme = "README.md"
 license = "MIT"

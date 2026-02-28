@@ -6,15 +6,20 @@ Runs Claude Code's /usage command in a hidden tmux session
 and displays server-side usage data in real time.
 
 Usage:
-    ccu                # refresh every 30s (default)
-    ccu 15             # refresh every 15s
-    ccu --debug        # show raw tmux output
-    ccu --once         # fetch once and exit
+    ccu                          # refresh every 30s (default)
+    ccu 15                       # refresh every 15s
+    ccu --config-dir ~/.claude   # use specific config directory
+    ccu --debug                  # show raw tmux output
+    ccu --once                   # fetch once and exit
+    ccu install                  # install ccu to ~/.local/bin
 
 Keys:
     r            immediate refresh
-    w/s          adjust refresh interval (±5s)
-    a/d          adjust bar width (±5)
+    w/s          adjust refresh interval (w=+5s, s=-5s)
+    a/d          adjust bar width (a=-5, d=+5)
+    e            toggle pace bar
+    q            toggle profile info
+    h/ESC        toggle help
     Ctrl+C       exit
 
 Requirements:
@@ -33,18 +38,19 @@ import termios
 import tty
 import select
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ─── Configuration ───────────────────────────────────────────
-TMUX_SESSION = "_ccm_bg"
+TMUX_SESSION = "_ccu_bg"
 DEFAULT_REFRESH = 30
 MIN_REFRESH = 3
 MAX_REFRESH = 120
 REFRESH_STEP = 5
 DEFAULT_BAR_WIDTH = 40
 MIN_BAR_WIDTH = 15
-MAX_BAR_WIDTH = 80
+MAX_BAR_WIDTH = 200
 BAR_WIDTH_STEP = 5
+SESSION_HOURS = 5
 CLAUDE_STARTUP_WAIT = 12
 USAGE_RENDER_WAIT = 5
 MAX_RETRIES = 3
@@ -52,6 +58,8 @@ MAX_RETRIES = 3
 # ─── Global state ────────────────────────────────────────────
 DEBUG = False
 ONCE = False
+CONFIG_DIR = None
+ACCOUNT_INFO = {}  # {"account": ..., "plan": ...}
 
 
 class UsageData:
@@ -128,6 +136,23 @@ def tmux_send(keys, enter=False):
         tmux("send-keys", "-t", TMUX_SESSION, "-l", keys)
 
 
+def parse_account_info(text):
+    """Parse account/plan info from claude welcome screen.
+    Expected format:  Opus 4.6 · Claude Max
+    """
+    info = {}
+    for line in text.split('\n'):
+        stripped = line.strip()
+        # "Opus 4.6 · Claude Max" or "Sonnet 4 · Claude Pro"
+        m = re.search(r'((?:Opus|Sonnet|Haiku)\s+[\d.]+)\s*·\s*(Claude\s+\w+(?:\s+\w+)?)', stripped)
+        if m:
+            info['model'] = m.group(1).strip()
+            info['plan'] = m.group(2).strip()
+
+            break
+    return info
+
+
 # ─── Claude session management ───────────────────────────────
 
 def setup_claude_session():
@@ -141,7 +166,10 @@ def setup_claude_session():
     tmux("new-session", "-d", "-s", TMUX_SESSION, "-x", "200", "-y", "60")
 
     # Claude Code 시작
-    tmux_send("claude", enter=True)
+    cmd = "claude"
+    if CONFIG_DIR:
+        cmd = f"CLAUDE_CONFIG_DIR={CONFIG_DIR} claude"
+    tmux_send(cmd, enter=True)
 
     # 초기화 대기
     print(f"⏳ Initializing Claude Code on tmux ({TMUX_SESSION})", end="", flush=True)
@@ -152,11 +180,27 @@ def setup_claude_session():
         # Welcome 메시지나 프롬프트 감지
         if any(kw in output for kw in ["Welcome", "❯", "Opus", "Sonnet", "Haiku"]):
             time.sleep(2)
+            output = tmux_capture()
+            ACCOUNT_INFO.update(parse_account_info(output))
             print(" ✅")
             return True
 
-    print(" ⚠️  (timeout, continuing anyway)")
-    return True
+    # 타임아웃 — 실패 처리
+    output = tmux_capture()
+    print()
+    if CONFIG_DIR:
+        print(f"\033[31mFailed to start Claude Code with --config-dir {CONFIG_DIR}\033[0m")
+    else:
+        print(f"\033[31mFailed to start Claude Code (timeout after {CLAUDE_STARTUP_WAIT}s)\033[0m")
+    # 원인 파악을 위해 tmux 출력 표시
+    stripped = output.strip()
+    if stripped:
+        print(f"\033[2mOutput:\033[0m")
+        for line in stripped.split('\n')[-15:]:
+            if line.strip():
+                print(f"\033[2m  {line}\033[0m")
+    tmux("kill-session", "-t", TMUX_SESSION)
+    sys.exit(1)
 
 
 def ensure_session():
@@ -314,23 +358,117 @@ def make_bar(pct, width=40):
     filled = int(width * pct / 100)
     empty = width - filled
 
-    if pct < 50:
-        color = "\033[32m"
-    elif pct < 80:
-        color = "\033[33m"
-    else:
-        color = "\033[31m"
-
-    bar = f"{color}{'█' * filled}{'░' * empty}\033[0m"
+    bar = f"\033[96m{'█' * filled}\033[0m\033[38;5;240m{'█' * empty}\033[0m"
     return f"{bar} {pct:3d}% used"
 
 
-def display(data, bar_width):
+def _parse_ampm_time(hour, minute, ampm):
+    """Convert 12h to 24h."""
+    if ampm == 'pm' and hour != 12:
+        hour += 12
+    elif ampm == 'am' and hour == 12:
+        hour = 0
+    return hour, minute
+
+
+def calc_session_elapsed(reset_str):
+    """Calculate elapsed % of current session window from reset time."""
+    m = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', reset_str.strip(), re.IGNORECASE)
+    if not m:
+        return None
+    hour, minute = _parse_ampm_time(
+        int(m.group(1)), int(m.group(2)) if m.group(2) else 0, m.group(3).lower()
+    )
+
+    now = datetime.now()
+    reset_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if reset_dt <= now:
+        reset_dt += timedelta(days=1)
+
+    start_dt = reset_dt - timedelta(hours=SESSION_HOURS)
+    elapsed = (now - start_dt).total_seconds() / (SESSION_HOURS * 3600) * 100
+    return max(0, min(100, int(elapsed)))
+
+
+WEEK_DAYS = 7
+
+def calc_week_elapsed(reset_str):
+    """Calculate elapsed % of current week window from reset time.
+    reset_str format: 'Mar 6, 11:59am (Asia/Seoul)' or 'Mar 6, 12pm (Asia/Seoul)'
+    """
+    m = re.match(
+        r'([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)',
+        reset_str.strip(), re.IGNORECASE
+    )
+    if not m:
+        return None
+
+    month_str = m.group(1)
+    day = int(m.group(2))
+    hour, minute = _parse_ampm_time(
+        int(m.group(3)), int(m.group(4)) if m.group(4) else 0, m.group(5).lower()
+    )
+
+    now = datetime.now()
+    # Parse month name
+    try:
+        month = datetime.strptime(month_str, "%b").month
+    except ValueError:
+        return None
+
+    year = now.year
+    reset_dt = datetime(year, month, day, hour, minute, 0)
+    # If reset is far in the past, it might be next year
+    if reset_dt < now - timedelta(days=WEEK_DAYS):
+        reset_dt = reset_dt.replace(year=year + 1)
+
+    start_dt = reset_dt - timedelta(days=WEEK_DAYS)
+    total = WEEK_DAYS * 24 * 3600
+    elapsed = (now - start_dt).total_seconds() / total * 100
+    return max(0, min(100, int(elapsed)))
+
+
+def make_pace_bar(pct, width=40):
+    """Pace bar showing elapsed time percentage. Yellow thin style."""
+    if pct is None:
+        return f"\033[38;5;240m{'─' * width}\033[0m   --"
+    filled = int(width * pct / 100)
+    empty = width - filled
+    bar = f"\033[33m{'━' * filled}\033[38;5;240m{'─' * empty}\033[0m"
+    return f"{bar} \033[33m{pct:3d}% elapsed\033[0m"
+
+
+def display_help():
+    """Show key bindings help screen"""
+    sys.stdout.write("\033[H\033[2J")
+    print(f"  \033[1mClaude Code Usage Monitor\033[0m")
+    print()
+    print(f"  \033[1mKeys\033[0m")
+    print(f"  \033[2m{'r':12s}\033[0m immediate refresh")
+    print(f"  \033[2m{'w/s':12s}\033[0m adjust refresh interval (w=+5s, s=-5s)")
+    print(f"  \033[2m{'a/d':12s}\033[0m adjust bar width (a=-5, d=+5)")
+    print(f"  \033[2m{'e':12s}\033[0m toggle pace bar")
+    print(f"  \033[2m{'q':12s}\033[0m toggle profile info")
+    print(f"  \033[2m{'h/ESC':12s}\033[0m toggle this help")
+    print(f"  \033[2m{'Ctrl+C':12s}\033[0m exit")
+    print()
+    sys.stdout.flush()
+
+
+def display(data, bar_width, show_pace=True, show_profile=True):
     """Dashboard display"""
     sys.stdout.write("\033[H\033[2J")
 
     # Header
-    print(f"  \033[1mClaude Code Usage Monitor\033[0m{' ' * 17}\033[2m{data.timestamp}\033[0m")
+    print(f"  \033[1mClaude Code Usage Monitor\033[0m")
+    if show_profile:
+        info_parts = []
+        if ACCOUNT_INFO.get('plan'):
+            info_parts.append(ACCOUNT_INFO['plan'])
+        config_path = CONFIG_DIR or os.path.join(os.path.expanduser("~"), ".claude")
+        info_parts.append(config_path)
+        if info_parts:
+            print(f"  \033[2m{' · '.join(info_parts)}\033[0m")
     print()
 
     if data.error:
@@ -353,6 +491,9 @@ def display(data, bar_width):
     print(f"  \033[1mCurrent Session\033[0m")
     print(f"  {make_bar(data.session_pct, bar_width)}")
     if data.session_reset:
+        if show_pace:
+            elapsed_pct = calc_session_elapsed(data.session_reset)
+            print(f"  {make_pace_bar(elapsed_pct, bar_width)}")
         print(f"  Resets {data.session_reset}")
     print()
 
@@ -360,6 +501,9 @@ def display(data, bar_width):
     print(f"  \033[1mCurrent Week (All Models)\033[0m")
     print(f"  {make_bar(data.week_all_pct, bar_width)}")
     if data.week_all_reset:
+        if show_pace:
+            week_elapsed = calc_week_elapsed(data.week_all_reset)
+            print(f"  {make_pace_bar(week_elapsed, bar_width)}")
         print(f"  Resets {data.week_all_reset}")
     print()
 
@@ -404,14 +548,47 @@ def cleanup(sig=None, frame=None):
     sys.exit(0)
 
 
+def do_install():
+    """Install ccu to ~/.local/bin for easy access."""
+    src = os.path.abspath(__file__)
+    bin_dir = os.path.expanduser("~/.local/bin")
+    dest = os.path.join(bin_dir, "ccu")
+
+    os.makedirs(bin_dir, exist_ok=True)
+
+    # Symlink to the current script
+    if os.path.exists(dest) or os.path.islink(dest):
+        os.remove(dest)
+    os.symlink(src, dest)
+    os.chmod(src, 0o755)
+
+    print(f"Installed: {dest} -> {src}")
+
+    # Check if ~/.local/bin is in PATH
+    path_dirs = os.environ.get("PATH", "").split(":")
+    if bin_dir not in path_dirs:
+        print()
+        print(f"\033[33m~/.local/bin is not in PATH. Add this to your shell profile:\033[0m")
+        print(f'  export PATH="$HOME/.local/bin:$PATH"')
+    else:
+        print("Run \033[1mccu\033[0m from anywhere.")
+
+
 def main():
-    global DEBUG, ONCE
+    global DEBUG, ONCE, CONFIG_DIR
 
     # ── Parse args ──
     refresh_sec = DEFAULT_REFRESH
     args = sys.argv[1:]
 
-    for arg in args:
+    # Handle install before other args
+    if args and args[0] in ("install", "--install"):
+        do_install()
+        sys.exit(0)
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
         if arg == "--debug":
             DEBUG = True
         elif arg == "--once":
@@ -419,8 +596,18 @@ def main():
         elif arg == "--help" or arg == "-h":
             print(__doc__)
             sys.exit(0)
+        elif arg == "--config-dir":
+            if i + 1 >= len(args):
+                print("\033[31m--config-dir requires a path argument\033[0m")
+                sys.exit(1)
+            i += 1
+            CONFIG_DIR = os.path.expanduser(args[i])
+            if not os.path.isdir(CONFIG_DIR):
+                print(f"\033[31mConfig directory not found: {CONFIG_DIR}\033[0m")
+                sys.exit(1)
         elif arg.isdigit():
             refresh_sec = int(arg)
+        i += 1
 
     # ── Setup ──
     check_dependencies()
@@ -432,6 +619,17 @@ def main():
     print()
 
     setup_claude_session()
+
+    if DEBUG:
+        print()
+        print("\033[2m─── DEBUG: Welcome screen capture ───\033[0m")
+        output = tmux_capture()
+        for line in output.strip().split('\n'):
+            if line.strip():
+                print(f"\033[2m  {line}\033[0m")
+        print(f"\033[2m─── Account info: {ACCOUNT_INFO} ───\033[0m")
+        print()
+        input("Press Enter to continue...")
 
     # 커서 숨기기
     sys.stdout.write("\033[?25l")
@@ -445,11 +643,17 @@ def main():
         # Initial query (blocking — setup phase covers the wait)
         data = query_usage()
         bar_width = DEFAULT_BAR_WIDTH
+        show_pace = True
+        show_profile = True
+        show_help = False
         redraw = True
 
         while True:
             if redraw:
-                display(data, bar_width)
+                if show_help:
+                    display_help()
+                else:
+                    display(data, bar_width, show_pace, show_profile)
                 redraw = False
             old_settings = termios.tcgetattr(sys.stdin)
             try:
@@ -464,21 +668,34 @@ def main():
                     if select.select([sys.stdin], [], [], 0)[0]:
                         key = sys.stdin.read(1)
                         if key in ('w', 'W'):
-                            refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
-                        elif key in ('s', 'S'):
                             refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
+                        elif key in ('s', 'S'):
+                            refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
                         elif key in ('d', 'D'):
                             bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
-                            display(data, bar_width)
+                            display(data, bar_width, show_pace, show_profile)
                         elif key in ('a', 'A'):
                             bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
-                            display(data, bar_width)
+                            display(data, bar_width, show_pace, show_profile)
+                        elif key in ('e', 'E'):
+                            show_pace = not show_pace
+                            display(data, bar_width, show_pace, show_profile)
+                        elif key in ('q', 'Q'):
+                            show_profile = not show_profile
+                            show_help = False
+                            display(data, bar_width, show_pace, show_profile)
+                        elif key in ('h', 'H', '\x1b'):
+                            show_help = not show_help
+                            if show_help:
+                                display_help()
+                            else:
+                                display(data, bar_width, show_pace, show_profile)
                         elif key in ('r', 'R'):
                             break
                         continue
                     secs = int(remaining) + 1
                     sys.stdout.write(
-                        f"\r  \033[2mRefresh: {refresh_sec}s · Next in {secs}s\033[0m{' ' * 20}"
+                        f"\r  \033[2mRefresh: {refresh_sec}s · Next in {secs}s · Last: {data.timestamp}\033[0m{' ' * 20}"
                     )
                     sys.stdout.flush()
                     time.sleep(0.1)
@@ -492,20 +709,38 @@ def main():
 
                 tick = 0
                 while thread.is_alive():
+                    redraw_now = False
                     if select.select([sys.stdin], [], [], 0)[0]:
                         key = sys.stdin.read(1)
                         if key in ('w', 'W'):
-                            refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
-                        elif key in ('s', 'S'):
                             refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
+                        elif key in ('s', 'S'):
+                            refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
                         elif key in ('d', 'D'):
                             bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
+                            redraw_now = True
                         elif key in ('a', 'A'):
                             bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
+                            redraw_now = True
+                        elif key in ('e', 'E'):
+                            show_pace = not show_pace
+                            redraw_now = True
+                        elif key in ('q', 'Q'):
+                            show_profile = not show_profile
+                            redraw_now = True
+                        elif key in ('h', 'H', '\x1b'):
+                            show_help = not show_help
+                            redraw_now = True
+                        if redraw_now:
+                            if show_help:
+                                display_help()
+                            else:
+                                display(data, bar_width, show_pace, show_profile)
+                            redraw_now = False
                     dots = "." * (tick // 4 % 3 + 1)
                     pad = "." * (3 - len(dots))
                     sys.stdout.write(
-                        f"\r  \033[2mRefresh: {refresh_sec}s · Refreshing{dots}\033[0m\033[2m{pad}\033[0m{' ' * 20}"
+                        f"\r  \033[2mRefresh: {refresh_sec}s · Refreshing{dots}\033[0m\033[2m{pad} · Last: {data.timestamp}\033[0m{' ' * 20}"
                     )
                     sys.stdout.flush()
                     tick += 1
