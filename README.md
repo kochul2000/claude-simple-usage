@@ -45,9 +45,12 @@ This creates a symlink in `~/.local/bin`. Make sure it's in your `PATH`.
 ccu                            # refresh every 30s (default)
 ccu 15                         # refresh every 15s
 ccu --config-dir ~/.claude     # use specific config directory
+ccu --no-pace                  # start with pace bar hidden
+ccu --no-profile               # start with profile info hidden
 ccu --once                     # fetch once and exit
 ccu --debug                    # show raw tmux output
 ccu install                    # install ccu to ~/.local/bin
+ccu uninstall                  # remove ccu from ~/.local/bin
 ```
 
 ## Keys

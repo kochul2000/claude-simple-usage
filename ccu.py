@@ -9,9 +9,12 @@ Usage:
     ccu                          # refresh every 30s (default)
     ccu 15                       # refresh every 15s
     ccu --config-dir ~/.claude   # use specific config directory
+    ccu --no-pace                # start with pace bar hidden
+    ccu --no-profile             # start with profile info hidden
     ccu --debug                  # show raw tmux output
     ccu --once                   # fetch once and exit
     ccu install                  # install ccu to ~/.local/bin
+    ccu uninstall                # remove ccu from ~/.local/bin
 
 Keys:
     r            immediate refresh
@@ -548,25 +551,25 @@ def cleanup(sig=None, frame=None):
     sys.exit(0)
 
 
+INSTALL_DIR = os.path.expanduser("~/.local/bin")
+INSTALL_PATH = os.path.join(INSTALL_DIR, "ccu")
+
+
 def do_install():
     """Install ccu to ~/.local/bin for easy access."""
     src = os.path.abspath(__file__)
-    bin_dir = os.path.expanduser("~/.local/bin")
-    dest = os.path.join(bin_dir, "ccu")
 
-    os.makedirs(bin_dir, exist_ok=True)
+    os.makedirs(INSTALL_DIR, exist_ok=True)
 
-    # Symlink to the current script
-    if os.path.exists(dest) or os.path.islink(dest):
-        os.remove(dest)
-    os.symlink(src, dest)
+    if os.path.exists(INSTALL_PATH) or os.path.islink(INSTALL_PATH):
+        os.remove(INSTALL_PATH)
+    os.symlink(src, INSTALL_PATH)
     os.chmod(src, 0o755)
 
-    print(f"Installed: {dest} -> {src}")
+    print(f"Installed: {INSTALL_PATH} -> {src}")
 
-    # Check if ~/.local/bin is in PATH
     path_dirs = os.environ.get("PATH", "").split(":")
-    if bin_dir not in path_dirs:
+    if INSTALL_DIR not in path_dirs:
         print()
         print(f"\033[33m~/.local/bin is not in PATH. Add this to your shell profile:\033[0m")
         print(f'  export PATH="$HOME/.local/bin:$PATH"')
@@ -574,16 +577,30 @@ def do_install():
         print("Run \033[1mccu\033[0m from anywhere.")
 
 
+def do_uninstall():
+    """Remove ccu from ~/.local/bin."""
+    if os.path.exists(INSTALL_PATH) or os.path.islink(INSTALL_PATH):
+        os.remove(INSTALL_PATH)
+        print(f"Removed: {INSTALL_PATH}")
+    else:
+        print(f"Not installed: {INSTALL_PATH}")
+
+
 def main():
     global DEBUG, ONCE, CONFIG_DIR
 
     # ── Parse args ──
     refresh_sec = DEFAULT_REFRESH
+    init_pace = True
+    init_profile = True
     args = sys.argv[1:]
 
-    # Handle install before other args
+    # Handle subcommands
     if args and args[0] in ("install", "--install"):
         do_install()
+        sys.exit(0)
+    if args and args[0] in ("uninstall", "--uninstall"):
+        do_uninstall()
         sys.exit(0)
 
     i = 0
@@ -605,6 +622,10 @@ def main():
             if not os.path.isdir(CONFIG_DIR):
                 print(f"\033[31mConfig directory not found: {CONFIG_DIR}\033[0m")
                 sys.exit(1)
+        elif arg == "--no-pace":
+            init_pace = False
+        elif arg == "--no-profile":
+            init_profile = False
         elif arg.isdigit():
             refresh_sec = int(arg)
         i += 1
@@ -643,8 +664,8 @@ def main():
         # Initial query (blocking — setup phase covers the wait)
         data = query_usage()
         bar_width = DEFAULT_BAR_WIDTH
-        show_pace = True
-        show_profile = True
+        show_pace = init_pace
+        show_profile = init_profile
         show_help = False
         redraw = True
 
