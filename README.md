@@ -59,9 +59,9 @@ ccu --debug      # show raw tmux output
 
 | Key | Action |
 |---|---|
-| `Space` / `Enter` | Immediate refresh |
-| `↑` / `↓` | Adjust refresh interval ±5s (3s–120s) |
-| `←` / `→` | Adjust bar width ±5 (15–80) |
+| `r` | Immediate refresh |
+| `w` / `s` | Adjust refresh interval ±5s (3s–120s) |
+| `a` / `d` | Adjust bar width ±5 (15–80) |
 | `Ctrl+C` | Exit |
 
 ## How it works

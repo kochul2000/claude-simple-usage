@@ -12,9 +12,9 @@ Usage:
     ccu --once         # fetch once and exit
 
 Keys:
-    Space/Enter  immediate refresh
-    ↑/↓          adjust refresh interval (±5s)
-    ←/→          adjust bar width (±5)
+    r            immediate refresh
+    w/s          adjust refresh interval (±5s)
+    a/d          adjust bar width (±5)
     Ctrl+C       exit
 
 Requirements:
@@ -379,29 +379,6 @@ def debug_output(raw):
     print(f"\033[35m─── END DEBUG ({len(raw)} chars) ───\033[0m\n")
 
 
-# ─── Input ───────────────────────────────────────────────────
-
-def _read_key():
-    """Read a keypress in cbreak mode.
-    Returns 'up', 'down', 'left', 'right', or the raw character."""
-    ch = sys.stdin.read(1)
-    if ch == '\x1b':
-        if select.select([sys.stdin], [], [], 0.15)[0]:
-            seq = sys.stdin.read(1)
-            if seq == '[' and select.select([sys.stdin], [], [], 0.15)[0]:
-                code = sys.stdin.read(1)
-                if code == 'A':
-                    return 'up'
-                if code == 'B':
-                    return 'down'
-                if code == 'C':
-                    return 'right'
-                if code == 'D':
-                    return 'left'
-        return None  # ESC or unknown sequence → ignore
-    return ch
-
-
 # ─── Lifecycle ───────────────────────────────────────────────
 
 def cleanup(sig=None, frame=None):
@@ -485,18 +462,18 @@ def main():
                     if remaining <= 0:
                         break
                     if select.select([sys.stdin], [], [], 0)[0]:
-                        key = _read_key()
-                        if key == 'up':
+                        key = sys.stdin.read(1)
+                        if key in ('w', 'W'):
                             refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
-                        elif key == 'down':
+                        elif key in ('s', 'S'):
                             refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
-                        elif key == 'right':
+                        elif key in ('d', 'D'):
                             bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
                             display(data, bar_width)
-                        elif key == 'left':
+                        elif key in ('a', 'A'):
                             bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
                             display(data, bar_width)
-                        elif key in (' ', '\r', '\n'):
+                        elif key in ('r', 'R'):
                             break
                         continue
                     secs = int(remaining) + 1
@@ -516,14 +493,14 @@ def main():
                 tick = 0
                 while thread.is_alive():
                     if select.select([sys.stdin], [], [], 0)[0]:
-                        key = _read_key()
-                        if key == 'up':
+                        key = sys.stdin.read(1)
+                        if key in ('w', 'W'):
                             refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
-                        elif key == 'down':
+                        elif key in ('s', 'S'):
                             refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
-                        elif key == 'right':
+                        elif key in ('d', 'D'):
                             bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
-                        elif key == 'left':
+                        elif key in ('a', 'A'):
                             bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
                     dots = "." * (tick // 4 % 3 + 1)
                     pad = "." * (3 - len(dots))
