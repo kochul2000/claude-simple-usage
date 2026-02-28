@@ -22,16 +22,20 @@ Real-time Claude Code usage monitor. Runs `/usage` in a hidden tmux session and 
 ## Quick Start
 
 ```bash
-# Download and run
-curl -sO https://raw.githubusercontent.com/kochul2000/claude-simple-usage/master/ccu.py
-python3 ccu.py
+# One-liner with uvx (no install needed)
+uvx --from git+https://github.com/kochul2000/claude-simple-usage.git ccu
 ```
 
-Or install as a command:
-
 ```bash
+# Or install with pip/uv
 pip install git+https://github.com/kochul2000/claude-simple-usage.git
 ccu
+```
+
+```bash
+# Or just download and run
+curl -sO https://raw.githubusercontent.com/kochul2000/claude-simple-usage/master/ccu.py
+python3 ccu.py
 ```
 
 ## Requirements
