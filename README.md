@@ -1,16 +1,18 @@
 # claude-simple-usage (`ccu`)
 
-Real-time Claude Code usage monitor. Runs `/usage` in a hidden tmux session and displays accurate server-side data.
+Real-time Claude Code usage monitor. Internally runs `claude /usage` via a hidden tmux session, so the numbers are **identical to what Claude Code itself shows** — no estimation or approximation.
+
+On top of that, pace bars let you compare your current usage against elapsed time in the billing cycle, so you can tell at a glance whether you're on track or burning too fast.
 
 ### Vanilla mode (`--no-pace --no-profile`)
 
-Almost identical to Claude Code's built-in `/usage` screen:
+Same data as Claude Code's `/usage`, just auto-refreshing:
 
 ![vanilla](docs/vanilla.png)
 
 ### Full mode (default)
 
-Adds pace bars (elapsed time comparison) and profile info. Supports monitoring multiple profiles simultaneously:
+Adds pace bars and profile info. Supports monitoring multiple profiles simultaneously:
 
 ![full](docs/default.png)
 
