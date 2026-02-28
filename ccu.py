@@ -45,7 +45,7 @@ import threading
 from datetime import datetime, timedelta
 
 # ─── Configuration ───────────────────────────────────────────
-TMUX_SESSION = "_ccu_bg"
+TMUX_SESSION = f"_ccu_bg_{os.getpid()}"
 DEFAULT_REFRESH = 30
 MIN_REFRESH = 3
 MAX_REFRESH = 120
