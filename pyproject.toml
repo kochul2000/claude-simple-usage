@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-simple-usage"
+version = "0.1.0"
+description = "Real-time Claude Code usage monitor via tmux"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [{ name = "kochul2000" }]
+keywords = ["claude", "claude-code", "usage", "monitor", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Topic :: Utilities",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/kochul2000/claude-simple-usage"
+
+[project.scripts]
+ccu = "ccu:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["ccu.py"]
