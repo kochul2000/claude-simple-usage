@@ -445,7 +445,7 @@ def make_pace_bar(pct, width=40):
 def display_help():
     """Show key bindings help screen"""
     sys.stdout.write("\033[H\033[2J")
-    print(f"  \033[1mClaude Code Usage Monitor\033[0m")
+    print(f"  \033[1mClaude Simple Usage\033[0m")
     print()
     print(f"  \033[1mKeys\033[0m")
     print(f"  \033[2m{'r':12s}\033[0m immediate refresh")
@@ -464,7 +464,7 @@ def display(data, bar_width, show_pace=True, show_profile=True):
     sys.stdout.write("\033[H\033[2J")
 
     # Header
-    print(f"  \033[1mClaude Code Usage Monitor\033[0m")
+    print(f"  \033[1mClaude Simple Usage\033[0m")
     if show_profile:
         info_parts = []
         if ACCOUNT_INFO.get('plan'):
@@ -652,7 +652,7 @@ def main():
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 
-    print("\033[1mClaude Code Usage Monitor\033[0m")
+    print("\033[1mClaude Simple Usage\033[0m")
     print(f"   Refresh: {refresh_sec}s | Debug: {DEBUG} | Once: {ONCE}")
     print()
 
