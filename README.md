@@ -2,7 +2,17 @@
 
 Real-time Claude Code usage monitor. Runs `/usage` in a hidden tmux session and displays accurate server-side data.
 
-![screenshot](screen-shot.png)
+### Vanilla mode (`--no-pace --no-profile`)
+
+Almost identical to Claude Code's built-in `/usage` screen:
+
+![vanilla](docs/vanilla.png)
+
+### Full mode (default)
+
+Adds pace bars (elapsed time comparison) and profile info:
+
+![full](docs/screen-shot.png)
 
 ## Quick Start
 
@@ -26,13 +36,25 @@ curl -sO https://raw.githubusercontent.com/kochul2000/claude-simple-usage/master
 python3 ccu.py
 ```
 
-To install `ccu` as a command:
+## Install as a command
 
 ```bash
 python3 ccu.py install
 ```
 
-This creates a symlink in `~/.local/bin`. Make sure it's in your `PATH`.
+You can bake in preset flags:
+
+```bash
+python3 ccu.py install --no-pace --config-dir ~/.claude-personal
+```
+
+This generates a wrapper script in `~/.local/bin/ccu` with your flags built in. You can still pass additional flags at runtime. To remove:
+
+```bash
+ccu uninstall
+```
+
+Make sure `~/.local/bin` is in your `PATH`.
 
 ## Requirements
 
@@ -50,6 +72,7 @@ ccu --no-profile               # start with profile info hidden
 ccu --once                     # fetch once and exit
 ccu --debug                    # show raw tmux output
 ccu install                    # install ccu to ~/.local/bin
+ccu install --no-pace          # install with preset flags
 ccu uninstall                  # remove ccu from ~/.local/bin
 ```
 

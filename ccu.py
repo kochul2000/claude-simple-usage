@@ -14,6 +14,7 @@ Usage:
     ccu --debug                  # show raw tmux output
     ccu --once                   # fetch once and exit
     ccu install                  # install ccu to ~/.local/bin
+    ccu install --no-pace        # install with preset flags
     ccu uninstall                # remove ccu from ~/.local/bin
 
 Keys:
@@ -555,18 +556,34 @@ INSTALL_DIR = os.path.expanduser("~/.local/bin")
 INSTALL_PATH = os.path.join(INSTALL_DIR, "ccu")
 
 
-def do_install():
-    """Install ccu to ~/.local/bin for easy access."""
+def do_install(extra_args=None):
+    """Install ccu to ~/.local/bin as a wrapper script with optional preset flags.
+
+    Usage:
+        ccu install                              # plain install
+        ccu install --no-pace --config-dir ~/.x   # bake in flags
+    """
     src = os.path.abspath(__file__)
+    preset = " ".join(extra_args) if extra_args else ""
 
     os.makedirs(INSTALL_DIR, exist_ok=True)
 
     if os.path.exists(INSTALL_PATH) or os.path.islink(INSTALL_PATH):
         os.remove(INSTALL_PATH)
-    os.symlink(src, INSTALL_PATH)
-    os.chmod(src, 0o755)
 
-    print(f"Installed: {INSTALL_PATH} -> {src}")
+    # Generate wrapper script with preset flags
+    with open(INSTALL_PATH, "w") as f:
+        f.write("#!/bin/sh\n")
+        if preset:
+            f.write(f'exec python3 "{src}" {preset} "$@"\n')
+        else:
+            f.write(f'exec python3 "{src}" "$@"\n')
+    os.chmod(INSTALL_PATH, 0o755)
+
+    print(f"Installed: {INSTALL_PATH}")
+    if preset:
+        print(f"  Preset flags: {preset}")
+    print(f"  Script: {src}")
 
     path_dirs = os.environ.get("PATH", "").split(":")
     if INSTALL_DIR not in path_dirs:
@@ -597,7 +614,7 @@ def main():
 
     # Handle subcommands
     if args and args[0] in ("install", "--install"):
-        do_install()
+        do_install(args[1:] if len(args) > 1 else None)
         sys.exit(0)
     if args and args[0] in ("uninstall", "--uninstall"):
         do_uninstall()
