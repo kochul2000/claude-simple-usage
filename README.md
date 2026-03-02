@@ -72,7 +72,7 @@ ccu -d ~/.claude               # use specific config directory
 ccu --config-dir ~/.claude     # (same, long form)
 ccu --no-pace                  # start with pace bar hidden
 ccu --no-profile               # start with profile info hidden
-ccu --once                     # fetch once and exit
+ccu --no-sonnet                # hide Sonnet weekly usage
 ccu --debug                    # show raw tmux output
 ccu install                    # install ccu to ~/.local/bin
 ccu install --no-pace          # install with preset flags
@@ -86,8 +86,10 @@ ccu uninstall                  # remove ccu from ~/.local/bin
 | `r` | Immediate refresh |
 | `w` / `s` | Adjust refresh interval (w=+5s, s=-5s, 3s–120s) |
 | `a` / `d` | Adjust bar width (a=-5, d=+5) |
-| `e` | Toggle pace bar (elapsed time comparison) |
-| `q` | Toggle profile info |
+| `` ` `` | Toggle all details on/off |
+| `1` | Toggle pace bar |
+| `2` | Toggle profile info |
+| `3` | Toggle sonnet weekly |
 | `h` / `ESC` | Toggle help |
 | `Ctrl+C` | Exit |
 

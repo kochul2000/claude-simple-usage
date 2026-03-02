@@ -12,8 +12,8 @@ Usage:
     ccu --config-dir ~/.claude   # (same, long form)
     ccu --no-pace                # start with pace bar hidden
     ccu --no-profile             # start with profile info hidden
+    ccu --no-sonnet              # hide Sonnet weekly usage
     ccu --debug                  # show raw tmux output
-    ccu --once                   # fetch once and exit
     ccu install                  # install ccu to ~/.local/bin
     ccu install --no-pace        # install with preset flags
     ccu uninstall                # remove ccu from ~/.local/bin
@@ -22,8 +22,10 @@ Keys:
     r            immediate refresh
     w/s          adjust refresh interval (w=+5s, s=-5s)
     a/d          adjust bar width (a=-5, d=+5)
-    e            toggle pace bar
-    q            toggle profile info
+    `            toggle all details
+    1            toggle pace bar
+    2            toggle profile info
+    3            toggle sonnet weekly
     h/ESC        toggle help
     Ctrl+C       exit
 
@@ -59,10 +61,10 @@ SESSION_HOURS = 5
 CLAUDE_STARTUP_WAIT = 12
 USAGE_RENDER_WAIT = 5
 MAX_RETRIES = 3
+PARSE_FAIL_REFRESH = 3
 
 # ─── Global state ────────────────────────────────────────────
 DEBUG = False
-ONCE = False
 CONFIG_DIR = None
 ACCOUNT_INFO = {}  # {"account": ..., "plan": ...}
 
@@ -76,7 +78,7 @@ class UsageData:
         self.week_all_reset = None
         self.week_sonnet_pct = None
         self.raw = ""
-        self.timestamp = datetime.now().strftime("%H:%M:%S")
+        self.timestamp = None
         self.error = None
         self.parse_success = False
 
@@ -92,7 +94,7 @@ def check_dependencies():
         missing.append(("claude", "npm install -g @anthropic-ai/claude-code"))
 
     if missing:
-        print("\033[31m❌ Missing dependencies:\033[0m")
+        print("\033[31mMissing dependencies:\033[0m")
         for name, install in missing:
             print(f"   {name}: {install}")
         sys.exit(1)
@@ -177,7 +179,7 @@ def setup_claude_session():
     tmux_send(cmd, enter=True)
 
     # 초기화 대기
-    print(f"⏳ Initializing Claude Code on tmux ({TMUX_SESSION})", end="", flush=True)
+    print(f"Initializing Claude Code on tmux ({TMUX_SESSION})", end="", flush=True)
     for i in range(CLAUDE_STARTUP_WAIT):
         time.sleep(1)
         print(".", end="", flush=True)
@@ -187,7 +189,7 @@ def setup_claude_session():
             time.sleep(2)
             output = tmux_capture()
             ACCOUNT_INFO.update(parse_account_info(output))
-            print(" ✅")
+            print(" ok")
             return True
 
     # 타임아웃 — 실패 처리
@@ -211,7 +213,7 @@ def setup_claude_session():
 def ensure_session():
     """세션이 살아있는지 확인하고, 죽었으면 재시작"""
     if not is_session_alive():
-        print("\033[33m⚠️  Restarting session...\033[0m")
+        print("\033[33mRestarting session...\033[0m")
         setup_claude_session()
 
 
@@ -223,7 +225,6 @@ def query_usage():
     /usage는 서버 사이드 데이터를 직접 조회하므로 정확함.
     """
     data = UsageData()
-    data.timestamp = datetime.now().strftime("%H:%M:%S")
 
     ensure_session()
 
@@ -328,6 +329,8 @@ def parse_usage(text, data):
                 found_any = True
 
     data.parse_success = found_any
+    if found_any:
+        data.timestamp = datetime.now().strftime("%H:%M:%S")
 
 
 def _extract_pct_and_reset(lines, start_idx):
@@ -364,7 +367,7 @@ def make_bar(pct, width=40):
     empty = width - filled
 
     bar = f"\033[96m{'█' * filled}\033[0m\033[38;5;240m{'█' * empty}\033[0m"
-    return f"{bar} {pct:3d}% used"
+    return f"{bar} \033[2m{pct:3d}% used\033[0m"
 
 
 def _parse_ampm_time(hour, minute, ampm):
@@ -452,15 +455,17 @@ def display_help():
     print(f"  \033[2m{'r':12s}\033[0m immediate refresh")
     print(f"  \033[2m{'w/s':12s}\033[0m adjust refresh interval (w=+5s, s=-5s)")
     print(f"  \033[2m{'a/d':12s}\033[0m adjust bar width (a=-5, d=+5)")
-    print(f"  \033[2m{'e':12s}\033[0m toggle pace bar")
-    print(f"  \033[2m{'q':12s}\033[0m toggle profile info")
+    print(f"  \033[2m{'`':12s}\033[0m toggle all details")
+    print(f"  \033[2m{'1':12s}\033[0m toggle pace bar")
+    print(f"  \033[2m{'2':12s}\033[0m toggle profile info")
+    print(f"  \033[2m{'3':12s}\033[0m toggle sonnet weekly")
     print(f"  \033[2m{'h/ESC':12s}\033[0m toggle this help")
     print(f"  \033[2m{'Ctrl+C':12s}\033[0m exit")
     print()
     sys.stdout.flush()
 
 
-def display(data, bar_width, show_pace=True, show_profile=True):
+def display(data, bar_width, show_pace=True, show_profile=True, show_sonnet=True):
     """Dashboard display"""
     sys.stdout.write("\033[H\033[2J")
 
@@ -477,18 +482,15 @@ def display(data, bar_width, show_pace=True, show_profile=True):
     print()
 
     if data.error:
-        print(f"  \033[31m❌ Error: {data.error}\033[0m")
+        print(f"  \033[31mError: {data.error}\033[0m")
         print()
 
     if not data.parse_success:
-        print(f"  \033[33m⚠️  Could not parse /usage data yet.\033[0m")
-        print(f"  \033[2m   Will retry on next refresh...\033[0m")
-        print()
-        if DEBUG:
+        if DEBUG and data.raw:
             print(f"  \033[2mRaw output ({len(data.raw)} chars):\033[0m")
             for line in data.raw.split('\n')[:20]:
                 print(f"  \033[2m  {repr(line)}\033[0m")
-        print()
+            print()
         sys.stdout.flush()
         return
 
@@ -499,7 +501,7 @@ def display(data, bar_width, show_pace=True, show_profile=True):
         if show_pace:
             elapsed_pct = calc_session_elapsed(data.session_reset)
             print(f"  {make_pace_bar(elapsed_pct, bar_width)}")
-        print(f"  Resets {data.session_reset}")
+        print(f"  \033[2mResets {data.session_reset}\033[0m")
     print()
 
     # ── Current Week (All Models) ──
@@ -509,13 +511,14 @@ def display(data, bar_width, show_pace=True, show_profile=True):
         if show_pace:
             week_elapsed = calc_week_elapsed(data.week_all_reset)
             print(f"  {make_pace_bar(week_elapsed, bar_width)}")
-        print(f"  Resets {data.week_all_reset}")
+        print(f"  \033[2mResets {data.week_all_reset}\033[0m")
     print()
 
     # ── Current Week (Sonnet) ──
-    print(f"  \033[1mCurrent Week (Sonnet Only)\033[0m")
-    print(f"  {make_bar(data.week_sonnet_pct, bar_width)}")
-    print()
+    if show_sonnet:
+        print(f"  \033[1mCurrent Week (Sonnet Only)\033[0m")
+        print(f"  {make_bar(data.week_sonnet_pct, bar_width)}")
+        print()
 
     sys.stdout.flush()
 
@@ -605,12 +608,13 @@ def do_uninstall():
 
 
 def main():
-    global DEBUG, ONCE, CONFIG_DIR
+    global DEBUG, CONFIG_DIR
 
     # ── Parse args ──
     refresh_sec = DEFAULT_REFRESH
     init_pace = True
     init_profile = True
+    init_sonnet = True
     args = sys.argv[1:]
 
     # Handle subcommands
@@ -626,8 +630,6 @@ def main():
         arg = args[i]
         if arg == "--debug":
             DEBUG = True
-        elif arg == "--once":
-            ONCE = True
         elif arg == "--help" or arg == "-h":
             print(__doc__)
             sys.exit(0)
@@ -644,6 +646,8 @@ def main():
             init_pace = False
         elif arg == "--no-profile":
             init_profile = False
+        elif arg == "--no-sonnet":
+            init_sonnet = False
         elif arg.isdigit():
             refresh_sec = int(arg)
         i += 1
@@ -654,7 +658,18 @@ def main():
     signal.signal(signal.SIGTERM, cleanup)
 
     print("\033[1mClaude Simple Usage\033[0m")
-    print(f"   Refresh: {refresh_sec}s | Debug: {DEBUG} | Once: {ONCE}")
+    opts = [f"refresh={refresh_sec}s"]
+    if CONFIG_DIR:
+        opts.append(f"config-dir={CONFIG_DIR}")
+    if not init_pace:
+        opts.append("no-pace")
+    if not init_profile:
+        opts.append("no-profile")
+    if not init_sonnet:
+        opts.append("no-sonnet")
+    if DEBUG:
+        opts.append("debug")
+    print(f"  \033[2m{' | '.join(opts)}\033[0m")
     print()
 
     setup_claude_session()
@@ -673,122 +688,155 @@ def main():
     # 커서 숨기기
     sys.stdout.write("\033[?25l")
 
-    if ONCE:
-        data = query_usage()
-        sys.stdout.write("\033[?25h")
-        display(data, DEFAULT_BAR_WIDTH)
-        cleanup()
-    else:
-        # Initial query (blocking — setup phase covers the wait)
-        data = query_usage()
-        bar_width = DEFAULT_BAR_WIDTH
-        show_pace = init_pace
-        show_profile = init_profile
-        show_help = False
-        redraw = True
+    data = UsageData()
+    bar_width = DEFAULT_BAR_WIDTH
+    show_pace = init_pace
+    show_profile = init_profile
+    show_sonnet = init_sonnet
+    show_help = False
+    redraw = True
+    first_run = True
 
-        while True:
-            if redraw:
-                if show_help:
-                    display_help()
-                else:
-                    display(data, bar_width, show_pace, show_profile)
-                redraw = False
-            old_settings = termios.tcgetattr(sys.stdin)
-            try:
-                tty.setcbreak(sys.stdin.fileno())
-                start = time.time()
+    while True:
+        if redraw:
+            if show_help:
+                display_help()
+            else:
+                display(data, bar_width, show_pace, show_profile, show_sonnet)
+            redraw = False
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            start = time.time()
 
-                # Phase 1: Countdown
-                while True:
-                    remaining = refresh_sec - (time.time() - start)
-                    if remaining <= 0:
+            # Phase 1: Countdown (첫 실행은 즉시 fetch)
+            if first_run:
+                effective_refresh = 0
+                first_run = False
+            elif not data.parse_success:
+                effective_refresh = PARSE_FAIL_REFRESH
+            else:
+                effective_refresh = refresh_sec
+            tick = 0
+            while True:
+                remaining = effective_refresh - (time.time() - start)
+                if remaining <= 0:
+                    break
+                if select.select([sys.stdin], [], [], 0)[0]:
+                    key = sys.stdin.read(1)
+                    if key in ('w', 'W'):
+                        refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
+                    elif key in ('s', 'S'):
+                        refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
+                    elif key in ('d', 'D'):
+                        bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
+                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key in ('a', 'A'):
+                        bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
+                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key == '`':
+                        if show_pace or show_profile or show_sonnet:
+                            show_pace = show_profile = show_sonnet = False
+                        else:
+                            show_pace = show_profile = show_sonnet = True
+                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key == '1':
+                        show_pace = not show_pace
+                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key == '2':
+                        show_profile = not show_profile
+                        show_help = False
+                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key == '3':
+                        show_sonnet = not show_sonnet
+                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key in ('h', 'H', '\x1b'):
+                        show_help = not show_help
+                        if show_help:
+                            display_help()
+                        else:
+                            display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key in ('r', 'R'):
                         break
-                    if select.select([sys.stdin], [], [], 0)[0]:
-                        key = sys.stdin.read(1)
-                        if key in ('w', 'W'):
-                            refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
-                        elif key in ('s', 'S'):
-                            refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
-                        elif key in ('d', 'D'):
-                            bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
-                            display(data, bar_width, show_pace, show_profile)
-                        elif key in ('a', 'A'):
-                            bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
-                            display(data, bar_width, show_pace, show_profile)
-                        elif key in ('e', 'E'):
-                            show_pace = not show_pace
-                            display(data, bar_width, show_pace, show_profile)
-                        elif key in ('q', 'Q'):
-                            show_profile = not show_profile
-                            show_help = False
-                            display(data, bar_width, show_pace, show_profile)
-                        elif key in ('h', 'H', '\x1b'):
-                            show_help = not show_help
-                            if show_help:
-                                display_help()
-                            else:
-                                display(data, bar_width, show_pace, show_profile)
-                        elif key in ('r', 'R'):
-                            break
-                        continue
-                    secs = int(remaining) + 1
+                    continue
+                secs = int(remaining) + 1
+                if data.parse_success:
                     sys.stdout.write(
                         f"\r  \033[2mRefresh: {refresh_sec}s · Next in {secs}s · Last: {data.timestamp}\033[0m{' ' * 20}"
                     )
-                    sys.stdout.flush()
-                    time.sleep(0.1)
+                else:
+                    spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+                    sys.stdout.write(
+                        f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data\033[0m{' ' * 20}"
+                    )
+                sys.stdout.flush()
+                tick += 1
+                time.sleep(0.1)
 
-                # Phase 2: Refresh in background thread
-                result = [None]
-                def _bg_query():
-                    result[0] = query_usage()
-                thread = threading.Thread(target=_bg_query, daemon=True)
-                thread.start()
+            # Phase 2: Refresh in background thread
+            result = [None]
+            def _bg_query():
+                result[0] = query_usage()
+            thread = threading.Thread(target=_bg_query, daemon=True)
+            thread.start()
 
-                tick = 0
-                while thread.is_alive():
-                    redraw_now = False
-                    if select.select([sys.stdin], [], [], 0)[0]:
-                        key = sys.stdin.read(1)
-                        if key in ('w', 'W'):
-                            refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
-                        elif key in ('s', 'S'):
-                            refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
-                        elif key in ('d', 'D'):
-                            bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
-                            redraw_now = True
-                        elif key in ('a', 'A'):
-                            bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
-                            redraw_now = True
-                        elif key in ('e', 'E'):
-                            show_pace = not show_pace
-                            redraw_now = True
-                        elif key in ('q', 'Q'):
-                            show_profile = not show_profile
-                            redraw_now = True
-                        elif key in ('h', 'H', '\x1b'):
-                            show_help = not show_help
-                            redraw_now = True
-                        if redraw_now:
-                            if show_help:
-                                display_help()
-                            else:
-                                display(data, bar_width, show_pace, show_profile)
-                            redraw_now = False
+            while thread.is_alive():
+                redraw_now = False
+                if select.select([sys.stdin], [], [], 0)[0]:
+                    key = sys.stdin.read(1)
+                    if key in ('w', 'W'):
+                        refresh_sec = min(MAX_REFRESH, refresh_sec + REFRESH_STEP)
+                    elif key in ('s', 'S'):
+                        refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
+                    elif key in ('d', 'D'):
+                        bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
+                        redraw_now = True
+                    elif key in ('a', 'A'):
+                        bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
+                        redraw_now = True
+                    elif key == '`':
+                        if show_pace or show_profile or show_sonnet:
+                            show_pace = show_profile = show_sonnet = False
+                        else:
+                            show_pace = show_profile = show_sonnet = True
+                        redraw_now = True
+                    elif key == '1':
+                        show_pace = not show_pace
+                        redraw_now = True
+                    elif key == '2':
+                        show_profile = not show_profile
+                        redraw_now = True
+                    elif key == '3':
+                        show_sonnet = not show_sonnet
+                        redraw_now = True
+                    elif key in ('h', 'H', '\x1b'):
+                        show_help = not show_help
+                        redraw_now = True
+                    if redraw_now:
+                        if show_help:
+                            display_help()
+                        else:
+                            display(data, bar_width, show_pace, show_profile, show_sonnet)
+                        redraw_now = False
+                spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+                if data.timestamp:
                     dots = "." * (tick // 4 % 3 + 1)
                     pad = "." * (3 - len(dots))
                     sys.stdout.write(
                         f"\r  \033[2mRefresh: {refresh_sec}s · Refreshing{dots}\033[0m\033[2m{pad} · Last: {data.timestamp}\033[0m{' ' * 20}"
                     )
-                    sys.stdout.flush()
-                    tick += 1
-                    time.sleep(0.1)
+                else:
+                    sys.stdout.write(
+                        f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data\033[0m{' ' * 20}"
+                    )
+                sys.stdout.flush()
+                tick += 1
+                time.sleep(0.1)
 
-                data = result[0]
-                redraw = True
-            finally:
-                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            data = result[0]
+            redraw = True
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
 
 if __name__ == "__main__":
