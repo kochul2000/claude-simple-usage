@@ -224,20 +224,26 @@ def setup_claude_session():
 
     # 초기화 대기
     print(f"Initializing Claude Code on tmux ({TMUX_SESSION})", end="", flush=True)
+    trust_handled = False
     for i in range(CLAUDE_STARTUP_WAIT):
         time.sleep(1)
         print(".", end="", flush=True)
         output = tmux_capture()
-        # Welcome 메시지나 프롬프트 감지
-        if any(kw in output for kw in ["Welcome", "❯", "Opus", "Sonnet", "Haiku"]):
+
+        # Trust prompt 감지 → Enter로 승인
+        if not trust_handled and "trust this folder" in output.lower():
+            tmux_send("Enter")
+            trust_handled = True
+            time.sleep(2)
+            continue
+
+        # Welcome 메시지 감지 (trust prompt의 ❯와 구분)
+        if "Welcome" in output or any(
+            kw in output for kw in ["Opus", "Sonnet", "Haiku"]
+        ):
             time.sleep(2)
             output = tmux_capture()
             ACCOUNT_INFO.update(parse_account_info(output))
-            # Status dialog가 뜰 수 있으므로 Escape로 닫기
-            tmux_send("Escape")
-            time.sleep(0.5)
-            tmux_send("Escape")
-            time.sleep(0.5)
             print(" ok")
             return True
 
@@ -964,7 +970,11 @@ def main():
                             display(data, bar_width, show_pace, show_profile, show_sonnet)
                         redraw_now = False
                 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-                if data.timestamp:
+                if data.error and data.error != "session_dead":
+                    sys.stdout.write(
+                        f"\r  \033[2m{spinner[tick % len(spinner)]}\033[0m \033[31mClaude server error\033[0m \033[2m· Retrying\033[0m\033[K"
+                    )
+                elif data.timestamp:
                     dots = "." * (tick // 4 % 3 + 1)
                     pad = " " * (3 - len(dots))
                     sys.stdout.write(
