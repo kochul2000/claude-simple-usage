@@ -26,6 +26,8 @@ Keys:
     1            toggle pace bar
     2            toggle profile info
     3            toggle sonnet weekly
+    t            show tmux pane capture (debug)
+    !            force restart Claude session
     h/ESC        toggle help
     Ctrl+C       exit
 
@@ -45,6 +47,7 @@ import termios
 import tty
 import select
 import threading
+import atexit
 from datetime import datetime, timedelta
 
 # ─── Configuration ───────────────────────────────────────────
@@ -61,7 +64,9 @@ SESSION_HOURS = 5
 CLAUDE_STARTUP_WAIT = 12
 USAGE_RENDER_WAIT = 5
 MAX_RETRIES = 3
-PARSE_FAIL_REFRESH = 3
+PARSE_FAIL_REFRESH = 10
+MAX_CONSECUTIVE_FAILURES = 5
+QUERY_TIMEOUT = 30
 
 # ─── Global state ────────────────────────────────────────────
 DEBUG = False
@@ -107,6 +112,39 @@ def is_session_alive():
         capture_output=True
     )
     return r.returncode == 0
+
+
+def cleanup_zombie_sessions():
+    """PID가 죽은 _ccu_bg_* 좀비 tmux 세션 정리"""
+    r = subprocess.run(
+        ["tmux", "list-sessions", "-F", "#{session_name}"],
+        capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        return
+    killed = []
+    for name in r.stdout.strip().split('\n'):
+        if not name.startswith("_ccu_bg_"):
+            continue
+        try:
+            pid = int(name.split("_")[-1])
+        except ValueError:
+            continue
+        # 현재 프로세스의 세션은 건드리지 않음
+        if pid == os.getpid():
+            continue
+        # PID가 살아있는지 확인
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            # 프로세스 없음 → 좀비 세션
+            subprocess.run(
+                ["tmux", "kill-session", "-t", name],
+                capture_output=True
+            )
+            killed.append(name)
+    if killed:
+        print(f"\033[2mCleaned up {len(killed)} orphaned session(s)\033[0m")
 
 
 # ─── tmux helpers ────────────────────────────────────────────
@@ -172,6 +210,12 @@ def setup_claude_session():
     # 큰 터미널 사이즈로 세션 생성 (TUI 렌더링을 위해)
     tmux("new-session", "-d", "-s", TMUX_SESSION, "-x", "200", "-y", "60")
 
+    # PID watchdog: ccu 프로세스가 죽으면 tmux 세션 자동 종료
+    pid = os.getpid()
+    watchdog = f"(while kill -0 {pid} 2>/dev/null; do sleep 5; done; tmux kill-session -t {TMUX_SESSION}) &"
+    tmux_send(watchdog, enter=True)
+    time.sleep(0.3)
+
     # Claude Code 시작
     cmd = "claude"
     if CONFIG_DIR:
@@ -189,6 +233,11 @@ def setup_claude_session():
             time.sleep(2)
             output = tmux_capture()
             ACCOUNT_INFO.update(parse_account_info(output))
+            # Status dialog가 뜰 수 있으므로 Escape로 닫기
+            tmux_send("Escape")
+            time.sleep(0.5)
+            tmux_send("Escape")
+            time.sleep(0.5)
             print(" ok")
             return True
 
@@ -210,11 +259,12 @@ def setup_claude_session():
     sys.exit(1)
 
 
-def ensure_session():
-    """세션이 살아있는지 확인하고, 죽었으면 재시작"""
+def is_claude_alive():
+    """tmux 세션이 살아있고 Claude가 실행 중인지 확인"""
     if not is_session_alive():
-        print("\033[33mRestarting session...\033[0m")
-        setup_claude_session()
+        return False
+    output = tmux_capture().strip()
+    return bool(output)
 
 
 # ─── Usage query & parsing ───────────────────────────────────
@@ -226,9 +276,15 @@ def query_usage():
     """
     data = UsageData()
 
-    ensure_session()
+    if not is_claude_alive():
+        data.error = "session_dead"
+        return data
 
     try:
+        # Step 0: 혹시 남아있는 dialog/popup 닫기
+        tmux_send("Escape")
+        time.sleep(0.3)
+
         # Step 1: /usage 입력 (Enter를 분리해서 보내야 자동완성 처리됨)
         tmux_send("/usage")
         time.sleep(0.5)          # 자동완성 드롭다운 렌더링 대기
@@ -327,6 +383,12 @@ def parse_usage(text, data):
                 # 0%인 경우 바가 비어있어서 숫자가 안 보일 수 있음
                 data.week_sonnet_pct = 0
                 found_any = True
+
+    # 서버 에러 감지
+    for line in lines:
+        if 'Error:' in line or 'Failed to load' in line:
+            data.error = line.strip()
+            break
 
     data.parse_success = found_any
     if found_any:
@@ -459,9 +521,30 @@ def display_help():
     print(f"  \033[2m{'1':12s}\033[0m toggle pace bar")
     print(f"  \033[2m{'2':12s}\033[0m toggle profile info")
     print(f"  \033[2m{'3':12s}\033[0m toggle sonnet weekly")
+    print(f"  \033[2m{'t':12s}\033[0m show tmux pane capture")
+    print(f"  \033[2m{'!':12s}\033[0m force restart session")
     print(f"  \033[2m{'h/ESC':12s}\033[0m toggle this help")
     print(f"  \033[2m{'Ctrl+C':12s}\033[0m exit")
     print()
+    sys.stdout.flush()
+
+
+def display_tmux_capture():
+    """현재 tmux 패인 내용을 화면에 표시 (디버그용)"""
+    sys.stdout.write("\033[H\033[2J")
+    print(f"  \033[1mTmux Capture\033[0m  \033[2m({TMUX_SESSION})\033[0m")
+    print()
+    if is_session_alive():
+        raw = tmux_capture()
+        if raw.strip():
+            for line in raw.split('\n'):
+                print(f"  \033[2m{line}\033[0m")
+        else:
+            print("  \033[2m(pane is empty)\033[0m")
+    else:
+        print("  \033[31m(session is dead)\033[0m")
+    print()
+    print(f"  \033[2mPress any key to return\033[0m")
     sys.stdout.flush()
 
 
@@ -481,8 +564,8 @@ def display(data, bar_width, show_pace=True, show_profile=True, show_sonnet=True
             print(f"  \033[2m{' · '.join(info_parts)}\033[0m")
     print()
 
-    if data.error:
-        print(f"  \033[31mError: {data.error}\033[0m")
+    if data.error and data.error != "session_dead":
+        print(f"  \033[31mClaude server error: {data.error}\033[0m")
         print()
 
     if not data.parse_success:
@@ -533,8 +616,15 @@ def debug_output(raw):
 
 # ─── Lifecycle ───────────────────────────────────────────────
 
+_cleanup_done = False
+
 def cleanup(sig=None, frame=None):
     """Clean up on exit"""
+    global _cleanup_done
+    if _cleanup_done:
+        return
+    _cleanup_done = True
+
     # Restore cursor and terminal
     sys.stdout.write("\033[?25h")
     try:
@@ -553,7 +643,8 @@ def cleanup(sig=None, frame=None):
         pass
 
     print("\033[32mDone\033[0m")
-    sys.exit(0)
+    if sig is not None:
+        sys.exit(0)
 
 
 INSTALL_DIR = os.path.expanduser("~/.local/bin")
@@ -656,6 +747,8 @@ def main():
     check_dependencies()
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
+    atexit.register(cleanup)
+    cleanup_zombie_sessions()
 
     print("\033[1mClaude Simple Usage\033[0m")
     opts = [f"refresh={refresh_sec}s"]
@@ -696,6 +789,7 @@ def main():
     show_help = False
     redraw = True
     first_run = True
+    consecutive_failures = 0
 
     while True:
         if redraw:
@@ -756,22 +850,65 @@ def main():
                             display_help()
                         else:
                             display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key in ('t', 'T'):
+                        display_tmux_capture()
+                        sys.stdin.read(1)
+                        if show_help:
+                            display_help()
+                        else:
+                            display(data, bar_width, show_pace, show_profile, show_sonnet)
+                    elif key == '!':
+                        sys.stdout.write("\033[H\033[2J")  # 화면 클리어
+                        sys.stdout.flush()
+                        if is_session_alive():
+                            tmux("kill-session", "-t", TMUX_SESSION)
+                            time.sleep(0.5)
+                        setup_claude_session()
+                        consecutive_failures = 0
+                        break
                     elif key in ('r', 'R'):
                         break
                     continue
                 secs = int(remaining) + 1
                 if data.parse_success:
                     sys.stdout.write(
-                        f"\r  \033[2mRefresh: {refresh_sec}s · Next in {secs}s · Last: {data.timestamp}\033[0m{' ' * 20}"
+                        f"\r  \033[2mRefresh: {refresh_sec}s · Next in {secs}s · Last: {data.timestamp}\033[0m\033[K"
+                    )
+                elif data.error and data.error != "session_dead":
+                    # 서버 에러 — 명시적으로 표시
+                    sys.stdout.write(
+                        f"\r  \033[31mClaude server error\033[0m \033[2m· Retry in {secs}s\033[0m\033[K"
                     )
                 else:
                     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-                    sys.stdout.write(
-                        f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data\033[0m{' ' * 20}"
-                    )
+                    hint = ""
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        hint = " · \033[33mrestarting...\033[0m\033[2m"
+                    elif consecutive_failures > 0:
+                        hint = f" ({consecutive_failures + 1}/{MAX_CONSECUTIVE_FAILURES})"
+                    if data.timestamp:
+                        dots = "." * (tick // 4 % 3 + 1)
+                        pad = " " * (3 - len(dots))
+                        sys.stdout.write(
+                            f"\r  \033[2m{spinner[tick % len(spinner)]} Refreshing{dots}{pad}{hint} · Last: {data.timestamp}\033[0m\033[K"
+                        )
+                    else:
+                        sys.stdout.write(
+                            f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data{hint}\033[0m\033[K"
+                        )
                 sys.stdout.flush()
                 tick += 1
                 time.sleep(0.1)
+
+            # Auto-restart on consecutive failures
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                sys.stdout.write("\033[H\033[2J")  # 화면 클리어
+                sys.stdout.flush()
+                if is_session_alive():
+                    tmux("kill-session", "-t", TMUX_SESSION)
+                    time.sleep(0.5)
+                setup_claude_session()
+                consecutive_failures = 0
 
             # Phase 2: Refresh in background thread
             result = [None]
@@ -780,7 +917,11 @@ def main():
             thread = threading.Thread(target=_bg_query, daemon=True)
             thread.start()
 
+            thread_start = time.time()
             while thread.is_alive():
+                # Timeout: bail out if query takes too long
+                if time.time() - thread_start > QUERY_TIMEOUT:
+                    break
                 redraw_now = False
                 if select.select([sys.stdin], [], [], 0)[0]:
                     key = sys.stdin.read(1)
@@ -809,6 +950,10 @@ def main():
                     elif key == '3':
                         show_sonnet = not show_sonnet
                         redraw_now = True
+                    elif key in ('t', 'T'):
+                        display_tmux_capture()
+                        sys.stdin.read(1)
+                        redraw_now = True
                     elif key in ('h', 'H', '\x1b'):
                         show_help = not show_help
                         redraw_now = True
@@ -821,19 +966,40 @@ def main():
                 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
                 if data.timestamp:
                     dots = "." * (tick // 4 % 3 + 1)
-                    pad = "." * (3 - len(dots))
+                    pad = " " * (3 - len(dots))
                     sys.stdout.write(
-                        f"\r  \033[2mRefresh: {refresh_sec}s · Refreshing{dots}\033[0m\033[2m{pad} · Last: {data.timestamp}\033[0m{' ' * 20}"
+                        f"\r  \033[2m{spinner[tick % len(spinner)]} Refreshing{dots}{pad} · Last: {data.timestamp}\033[0m\033[K"
                     )
                 else:
                     sys.stdout.write(
-                        f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data\033[0m{' ' * 20}"
+                        f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data\033[0m\033[K"
                     )
                 sys.stdout.flush()
                 tick += 1
                 time.sleep(0.1)
 
-            data = result[0]
+            # Update consecutive failure tracking
+            qdata = result[0]
+            if qdata is not None and qdata.parse_success:
+                data = qdata
+                consecutive_failures = 0
+            elif qdata is not None and qdata.error == "session_dead":
+                # 세션 죽음 감지 → 즉시 재시작
+                sys.stdout.write("\033[H\033[2J")
+                sys.stdout.flush()
+                if is_session_alive():
+                    tmux("kill-session", "-t", TMUX_SESSION)
+                    time.sleep(0.5)
+                setup_claude_session()
+                consecutive_failures = 0
+            elif qdata is not None and qdata.error and "session_dead" not in qdata.error:
+                # 서버 에러 (e.g. "Failed to load usage data") → 세션 재시작 무의미
+                data = qdata
+                consecutive_failures = 0
+            else:
+                if qdata is not None:
+                    data = qdata
+                consecutive_failures += 1
             redraw = True
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
