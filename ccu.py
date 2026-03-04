@@ -893,10 +893,8 @@ def main():
                     elif consecutive_failures > 0:
                         hint = f" ({consecutive_failures + 1}/{MAX_CONSECUTIVE_FAILURES})"
                     if data.timestamp:
-                        dots = "." * (tick // 4 % 3 + 1)
-                        pad = " " * (3 - len(dots))
                         sys.stdout.write(
-                            f"\r  \033[2m{spinner[tick % len(spinner)]} Refreshing{dots}{pad}{hint} · Last: {data.timestamp}\033[0m\033[K"
+                            f"\r  \033[2mRefresh: {refresh_sec}s · {spinner[tick % len(spinner)]} Refreshing{hint} · Last: {data.timestamp}\033[0m\033[K"
                         )
                     else:
                         sys.stdout.write(
@@ -975,10 +973,8 @@ def main():
                         f"\r  \033[2m{spinner[tick % len(spinner)]}\033[0m \033[31mClaude server error\033[0m \033[2m· Retrying\033[0m\033[K"
                     )
                 elif data.timestamp:
-                    dots = "." * (tick // 4 % 3 + 1)
-                    pad = " " * (3 - len(dots))
                     sys.stdout.write(
-                        f"\r  \033[2m{spinner[tick % len(spinner)]} Refreshing{dots}{pad} · Last: {data.timestamp}\033[0m\033[K"
+                        f"\r  \033[2mRefresh: {refresh_sec}s · {spinner[tick % len(spinner)]} Refreshing · Last: {data.timestamp}\033[0m\033[K"
                     )
                 else:
                     sys.stdout.write(
