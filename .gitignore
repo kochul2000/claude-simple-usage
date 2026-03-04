@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+# playwright
+.playwright-mcp/
+
 # Virtual environments
 .venv
