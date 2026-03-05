@@ -470,33 +470,49 @@ WEEK_DAYS = 7
 
 def calc_week_elapsed(reset_str):
     """Calculate elapsed % of current week window from reset time.
-    reset_str format: 'Mar 6, 11:59am (Asia/Seoul)' or 'Mar 6, 12pm (Asia/Seoul)'
+    reset_str format: 'Mar 6, 11:59am (Asia/Seoul)' or '11:59am (Asia/Seoul)'
     """
+    # Try date+time format first: 'Mar 6, 11:59am'
     m = re.match(
         r'([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)',
         reset_str.strip(), re.IGNORECASE
     )
+    if m:
+        month_str = m.group(1)
+        day = int(m.group(2))
+        hour, minute = _parse_ampm_time(
+            int(m.group(3)), int(m.group(4)) if m.group(4) else 0, m.group(5).lower()
+        )
+
+        now = datetime.now()
+        try:
+            month = datetime.strptime(month_str, "%b").month
+        except ValueError:
+            return None
+
+        year = now.year
+        reset_dt = datetime(year, month, day, hour, minute, 0)
+        if reset_dt < now - timedelta(days=WEEK_DAYS):
+            reset_dt = reset_dt.replace(year=year + 1)
+
+        start_dt = reset_dt - timedelta(days=WEEK_DAYS)
+        total = WEEK_DAYS * 24 * 3600
+        elapsed = (now - start_dt).total_seconds() / total * 100
+        return max(0, min(100, int(elapsed)))
+
+    # Fallback: time-only format: '11:59am (Asia/Seoul)'
+    m = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', reset_str.strip(), re.IGNORECASE)
     if not m:
         return None
 
-    month_str = m.group(1)
-    day = int(m.group(2))
     hour, minute = _parse_ampm_time(
-        int(m.group(3)), int(m.group(4)) if m.group(4) else 0, m.group(5).lower()
+        int(m.group(1)), int(m.group(2)) if m.group(2) else 0, m.group(3).lower()
     )
 
     now = datetime.now()
-    # Parse month name
-    try:
-        month = datetime.strptime(month_str, "%b").month
-    except ValueError:
-        return None
-
-    year = now.year
-    reset_dt = datetime(year, month, day, hour, minute, 0)
-    # If reset is far in the past, it might be next year
-    if reset_dt < now - timedelta(days=WEEK_DAYS):
-        reset_dt = reset_dt.replace(year=year + 1)
+    reset_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if reset_dt <= now:
+        reset_dt += timedelta(days=1)
 
     start_dt = reset_dt - timedelta(days=WEEK_DAYS)
     total = WEEK_DAYS * 24 * 3600
