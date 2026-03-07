@@ -66,8 +66,8 @@ Make sure `~/.local/bin` is in your `PATH`.
 ## Usage
 
 ```bash
-ccu                            # refresh every 30s (default)
-ccu 15                         # refresh every 15s
+ccu                            # refresh every 600s (default)
+ccu 900                        # refresh every 900s
 ccu -d ~/.claude               # use specific config directory
 ccu --config-dir ~/.claude     # (same, long form)
 ccu --no-pace                  # start with pace bar hidden
@@ -84,7 +84,7 @@ ccu uninstall                  # remove ccu from ~/.local/bin
 | Key | Action |
 |---|---|
 | `r` | Immediate refresh |
-| `w` / `s` | Adjust refresh interval (w=+5s, s=-5s, 3s–120s) |
+| `w` / `s` | Adjust refresh interval (w=+30s, s=-30s, 600s–1200s) |
 | `a` / `d` | Adjust bar width (a=-5, d=+5) |
 | `` ` `` | Toggle all details on/off |
 | `1` | Toggle pace bar |
@@ -92,6 +92,10 @@ ccu uninstall                  # remove ccu from ~/.local/bin
 | `3` | Toggle sonnet weekly |
 | `h` / `ESC` | Toggle help |
 | `Ctrl+C` | Exit |
+
+## Rate Limit
+
+Anthropic enforces strict rate limits on the Claude API. The minimum refresh interval is set to **600 seconds (10 minutes)** to avoid triggering these limits. Setting it lower may result in rate-limited or failed requests.
 
 ## How it works
 

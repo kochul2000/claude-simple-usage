@@ -6,8 +6,8 @@ Runs Claude Code's /usage command in a hidden tmux session
 and displays server-side usage data in real time.
 
 Usage:
-    ccu                          # refresh every 30s (default)
-    ccu 15                       # refresh every 15s
+    ccu                          # refresh every 600s (default)
+    ccu 900                      # refresh every 900s
     ccu -d ~/.claude             # use specific config directory
     ccu --config-dir ~/.claude   # (same, long form)
     ccu --no-pace                # start with pace bar hidden
@@ -20,7 +20,7 @@ Usage:
 
 Keys:
     r            immediate refresh
-    w/s          adjust refresh interval (w=+5s, s=-5s)
+    w/s          adjust refresh interval (w=+30s, s=-30s)
     a/d          adjust bar width (a=-5, d=+5)
     `            toggle all details
     1            toggle pace bar
@@ -52,10 +52,10 @@ from datetime import datetime, timedelta
 
 # ─── Configuration ───────────────────────────────────────────
 TMUX_SESSION = f"_ccu_bg_{os.getpid()}"
-DEFAULT_REFRESH = 30
-MIN_REFRESH = 3
-MAX_REFRESH = 120
-REFRESH_STEP = 5
+DEFAULT_REFRESH = 600
+MIN_REFRESH = 600
+MAX_REFRESH = 1200
+REFRESH_STEP = 30
 DEFAULT_BAR_WIDTH = 40
 MIN_BAR_WIDTH = 15
 MAX_BAR_WIDTH = 200
@@ -537,7 +537,7 @@ def display_help():
     print()
     print(f"  \033[1mKeys\033[0m")
     print(f"  \033[2m{'r':12s}\033[0m immediate refresh")
-    print(f"  \033[2m{'w/s':12s}\033[0m adjust refresh interval (w=+5s, s=-5s)")
+    print(f"  \033[2m{'w/s':12s}\033[0m adjust refresh interval (w=+30s, s=-30s)")
     print(f"  \033[2m{'a/d':12s}\033[0m adjust bar width (a=-5, d=+5)")
     print(f"  \033[2m{'`':12s}\033[0m toggle all details")
     print(f"  \033[2m{'1':12s}\033[0m toggle pace bar")
