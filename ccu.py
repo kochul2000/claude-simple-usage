@@ -13,6 +13,8 @@ Usage:
     ccu --no-pace                # start with pace bar hidden
     ccu --no-profile             # start with profile info hidden
     ccu --no-sonnet              # hide Sonnet weekly usage
+    ccu --no-refresh             # start with refresh status hidden
+    ccu --horizontal             # horizontal layout (side by side)
     ccu --debug                  # show raw tmux output
     ccu install                  # install ccu to ~/.local/bin
     ccu install --no-pace        # install with preset flags
@@ -24,8 +26,10 @@ Keys:
     a/d          adjust bar width (a=-5, d=+5)
     `            toggle all details
     1            toggle pace bar
-    2            toggle profile info
+    2            toggle title & profile info
     3            toggle sonnet weekly
+    4            toggle refresh status
+    e            toggle horizontal layout
     t            show tmux pane capture (debug)
     !            force restart Claude session
     h/ESC        toggle help
@@ -426,6 +430,11 @@ def _extract_pct_and_reset(lines, start_idx):
 
 # ─── Display ─────────────────────────────────────────────────
 
+def strip_ansi(text):
+    """Remove ANSI escape codes for visible width calculation"""
+    return re.sub(r'\033\[[0-9;]*m', '', text)
+
+
 def make_bar(pct, width=40):
     """컬러 프로그레스 바 생성"""
     if pct is None:
@@ -541,8 +550,10 @@ def display_help():
     print(f"  \033[2m{'a/d':12s}\033[0m adjust bar width (a=-5, d=+5)")
     print(f"  \033[2m{'`':12s}\033[0m toggle all details")
     print(f"  \033[2m{'1':12s}\033[0m toggle pace bar")
-    print(f"  \033[2m{'2':12s}\033[0m toggle profile info")
+    print(f"  \033[2m{'2':12s}\033[0m toggle title & profile info")
     print(f"  \033[2m{'3':12s}\033[0m toggle sonnet weekly")
+    print(f"  \033[2m{'4':12s}\033[0m toggle refresh status")
+    print(f"  \033[2m{'e':12s}\033[0m toggle horizontal layout")
     print(f"  \033[2m{'t':12s}\033[0m show tmux pane capture")
     print(f"  \033[2m{'!':12s}\033[0m force restart session")
     print(f"  \033[2m{'h/ESC':12s}\033[0m toggle this help")
@@ -570,13 +581,15 @@ def display_tmux_capture():
     sys.stdout.flush()
 
 
-def display(data, bar_width, show_pace=True, show_profile=True, show_sonnet=True):
+def display(data, bar_width, show_pace=True, show_profile=True, show_sonnet=True, horizontal=False):
     """Dashboard display"""
+    if horizontal:
+        return _display_horizontal(data, bar_width, show_pace, show_profile, show_sonnet)
     sys.stdout.write("\033[H\033[2J")
 
     # Header
-    print(f"  \033[1mClaude Simple Usage\033[0m")
     if show_profile:
+        print(f"  \033[1mClaude Simple Usage\033[0m")
         info_parts = []
         if ACCOUNT_INFO.get('plan'):
             info_parts.append(ACCOUNT_INFO['plan'])
@@ -584,7 +597,7 @@ def display(data, bar_width, show_pace=True, show_profile=True, show_sonnet=True
         info_parts.append(config_path)
         if info_parts:
             print(f"  \033[2m{' · '.join(info_parts)}\033[0m")
-    print()
+        print()
 
     if data.error and data.error != "session_dead":
         print(f"  \033[31mClaude server error: {data.error}\033[0m")
@@ -625,6 +638,96 @@ def display(data, bar_width, show_pace=True, show_profile=True, show_sonnet=True
         print(f"  {make_bar(data.week_sonnet_pct, bar_width)}")
         print()
 
+    sys.stdout.flush()
+
+
+def _display_horizontal(data, bar_width, show_pace=True, show_profile=True, show_sonnet=True):
+    """Horizontal dashboard display - usage blocks side by side"""
+    sys.stdout.write("\033[H\033[2J")
+
+    # Header
+    if show_profile:
+        print(f"  \033[1mClaude Simple Usage\033[0m")
+        info_parts = []
+        if ACCOUNT_INFO.get('plan'):
+            info_parts.append(ACCOUNT_INFO['plan'])
+        config_path = CONFIG_DIR or os.path.join(os.path.expanduser("~"), ".claude")
+        info_parts.append(config_path)
+        if info_parts:
+            print(f"  \033[2m{' · '.join(info_parts)}\033[0m")
+        print()
+
+    if data.error and data.error != "session_dead":
+        print(f"  \033[31mClaude server error: {data.error}\033[0m")
+        print()
+
+    if not data.parse_success:
+        if DEBUG and data.raw:
+            print(f"  \033[2mRaw output ({len(data.raw)} chars):\033[0m")
+            for line in data.raw.split('\n')[:20]:
+                print(f"  \033[2m  {repr(line)}\033[0m")
+            print()
+        sys.stdout.flush()
+        return
+
+    # Build columns
+    columns = []
+
+    # Column 1: Current Session
+    col = []
+    col.append(f"\033[1mCurrent Session\033[0m")
+    col.append(make_bar(data.session_pct, bar_width))
+    if data.session_reset:
+        if show_pace:
+            elapsed_pct = calc_session_elapsed(data.session_reset)
+            col.append(make_pace_bar(elapsed_pct, bar_width))
+        col.append(f"\033[2mResets {data.session_reset}\033[0m")
+    columns.append(col)
+
+    # Column 2: Current Week (All Models)
+    col = []
+    col.append(f"\033[1mCurrent Week (All Models)\033[0m")
+    col.append(make_bar(data.week_all_pct, bar_width))
+    if data.week_all_reset:
+        if show_pace:
+            week_elapsed = calc_week_elapsed(data.week_all_reset)
+            col.append(make_pace_bar(week_elapsed, bar_width))
+        col.append(f"\033[2mResets {data.week_all_reset}\033[0m")
+    columns.append(col)
+
+    # Column 3: Current Week (Sonnet)
+    if show_sonnet:
+        col = []
+        col.append(f"\033[1mCurrent Week (Sonnet Only)\033[0m")
+        col.append(make_bar(data.week_sonnet_pct, bar_width))
+        columns.append(col)
+
+    if not columns:
+        sys.stdout.flush()
+        return
+
+    # Calculate column widths (visible characters only)
+    col_widths = []
+    for col in columns:
+        w = max(len(strip_ansi(line)) for line in col) if col else 0
+        col_widths.append(w)
+
+    # Render columns side by side
+    max_height = max(len(c) for c in columns)
+    gap = 4
+    for row in range(max_height):
+        parts = []
+        for ci, col in enumerate(columns):
+            if row < len(col):
+                line = col[row]
+                visible_len = len(strip_ansi(line))
+                padding = col_widths[ci] - visible_len
+                parts.append(line + ' ' * padding)
+            else:
+                parts.append(' ' * col_widths[ci])
+        print(f"  {(' ' * gap).join(parts)}")
+
+    print()
     sys.stdout.flush()
 
 
@@ -728,6 +831,8 @@ def main():
     init_pace = True
     init_profile = True
     init_sonnet = True
+    init_refresh = True
+    init_horizontal = False
     args = sys.argv[1:]
 
     # Handle subcommands
@@ -761,6 +866,10 @@ def main():
             init_profile = False
         elif arg == "--no-sonnet":
             init_sonnet = False
+        elif arg == "--no-refresh":
+            init_refresh = False
+        elif arg in ("--horizontal", "--wide"):
+            init_horizontal = True
         elif arg.isdigit():
             refresh_sec = int(arg)
         i += 1
@@ -782,6 +891,10 @@ def main():
         opts.append("no-profile")
     if not init_sonnet:
         opts.append("no-sonnet")
+    if not init_refresh:
+        opts.append("no-refresh")
+    if init_horizontal:
+        opts.append("horizontal")
     if DEBUG:
         opts.append("debug")
     print(f"  \033[2m{' | '.join(opts)}\033[0m")
@@ -808,6 +921,8 @@ def main():
     show_pace = init_pace
     show_profile = init_profile
     show_sonnet = init_sonnet
+    show_refresh = init_refresh
+    show_horizontal = init_horizontal
     show_help = False
     redraw = True
     first_run = True
@@ -818,7 +933,7 @@ def main():
             if show_help:
                 display_help()
             else:
-                display(data, bar_width, show_pace, show_profile, show_sonnet)
+                display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
             redraw = False
         old_settings = termios.tcgetattr(sys.stdin)
         try:
@@ -846,39 +961,45 @@ def main():
                         refresh_sec = max(MIN_REFRESH, refresh_sec - REFRESH_STEP)
                     elif key in ('d', 'D'):
                         bar_width = min(MAX_BAR_WIDTH, bar_width + BAR_WIDTH_STEP)
-                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key in ('a', 'A'):
                         bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
-                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key == '`':
-                        if show_pace or show_profile or show_sonnet:
-                            show_pace = show_profile = show_sonnet = False
+                        if show_pace or show_profile or show_sonnet or show_refresh:
+                            show_pace = show_profile = show_sonnet = show_refresh = False
                         else:
-                            show_pace = show_profile = show_sonnet = True
-                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                            show_pace = show_profile = show_sonnet = show_refresh = True
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key == '1':
                         show_pace = not show_pace
-                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key == '2':
                         show_profile = not show_profile
                         show_help = False
-                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key == '3':
                         show_sonnet = not show_sonnet
-                        display(data, bar_width, show_pace, show_profile, show_sonnet)
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
+                    elif key == '4':
+                        show_refresh = not show_refresh
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
+                    elif key in ('e', 'E'):
+                        show_horizontal = not show_horizontal
+                        display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key in ('h', 'H', '\x1b'):
                         show_help = not show_help
                         if show_help:
                             display_help()
                         else:
-                            display(data, bar_width, show_pace, show_profile, show_sonnet)
+                            display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key in ('t', 'T'):
                         display_tmux_capture()
                         sys.stdin.read(1)
                         if show_help:
                             display_help()
                         else:
-                            display(data, bar_width, show_pace, show_profile, show_sonnet)
+                            display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key == '!':
                         sys.stdout.write("\033[H\033[2J")  # 화면 클리어
                         sys.stdout.flush()
@@ -891,32 +1012,33 @@ def main():
                     elif key in ('r', 'R'):
                         break
                     continue
-                secs = int(remaining) + 1
-                if data.parse_success:
-                    sys.stdout.write(
-                        f"\r  \033[2mRefresh: {refresh_sec}s · Next in {secs}s · Last: {data.timestamp}\033[0m\033[K"
-                    )
-                elif data.error and data.error != "session_dead":
-                    # 서버 에러 — 명시적으로 표시
-                    sys.stdout.write(
-                        f"\r  \033[31mClaude server error\033[0m \033[2m· Retry in {secs}s\033[0m\033[K"
-                    )
-                else:
-                    spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-                    hint = ""
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                        hint = " · \033[33mrestarting...\033[0m\033[2m"
-                    elif consecutive_failures > 0:
-                        hint = f" ({consecutive_failures + 1}/{MAX_CONSECUTIVE_FAILURES})"
-                    if data.timestamp:
+                if show_refresh:
+                    secs = int(remaining) + 1
+                    if data.parse_success:
                         sys.stdout.write(
-                            f"\r  \033[2mRefresh: {refresh_sec}s · {spinner[tick % len(spinner)]} Refreshing{hint} · Last: {data.timestamp}\033[0m\033[K"
+                            f"\r  \033[2mRefresh: {refresh_sec}s · Next in {secs}s · Last: {data.timestamp}\033[0m\033[K"
+                        )
+                    elif data.error and data.error != "session_dead":
+                        # 서버 에러 — 명시적으로 표시
+                        sys.stdout.write(
+                            f"\r  \033[31mClaude server error\033[0m \033[2m· Retry in {secs}s\033[0m\033[K"
                         )
                     else:
-                        sys.stdout.write(
-                            f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data{hint}\033[0m\033[K"
-                        )
-                sys.stdout.flush()
+                        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+                        hint = ""
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            hint = " · \033[33mrestarting...\033[0m\033[2m"
+                        elif consecutive_failures > 0:
+                            hint = f" ({consecutive_failures + 1}/{MAX_CONSECUTIVE_FAILURES})"
+                        if data.timestamp:
+                            sys.stdout.write(
+                                f"\r  \033[2mRefresh: {refresh_sec}s · {spinner[tick % len(spinner)]} Refreshing{hint} · Last: {data.timestamp}\033[0m\033[K"
+                            )
+                        else:
+                            sys.stdout.write(
+                                f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data{hint}\033[0m\033[K"
+                            )
+                    sys.stdout.flush()
                 tick += 1
                 time.sleep(0.1)
 
@@ -956,10 +1078,10 @@ def main():
                         bar_width = max(MIN_BAR_WIDTH, bar_width - BAR_WIDTH_STEP)
                         redraw_now = True
                     elif key == '`':
-                        if show_pace or show_profile or show_sonnet:
-                            show_pace = show_profile = show_sonnet = False
+                        if show_pace or show_profile or show_sonnet or show_refresh:
+                            show_pace = show_profile = show_sonnet = show_refresh = False
                         else:
-                            show_pace = show_profile = show_sonnet = True
+                            show_pace = show_profile = show_sonnet = show_refresh = True
                         redraw_now = True
                     elif key == '1':
                         show_pace = not show_pace
@@ -969,6 +1091,12 @@ def main():
                         redraw_now = True
                     elif key == '3':
                         show_sonnet = not show_sonnet
+                        redraw_now = True
+                    elif key == '4':
+                        show_refresh = not show_refresh
+                        redraw_now = True
+                    elif key in ('e', 'E'):
+                        show_horizontal = not show_horizontal
                         redraw_now = True
                     elif key in ('t', 'T'):
                         display_tmux_capture()
@@ -981,22 +1109,23 @@ def main():
                         if show_help:
                             display_help()
                         else:
-                            display(data, bar_width, show_pace, show_profile, show_sonnet)
+                            display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                         redraw_now = False
-                spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-                if data.error and data.error != "session_dead":
-                    sys.stdout.write(
-                        f"\r  \033[2m{spinner[tick % len(spinner)]}\033[0m \033[31mClaude server error\033[0m \033[2m· Retrying\033[0m\033[K"
-                    )
-                elif data.timestamp:
-                    sys.stdout.write(
-                        f"\r  \033[2mRefresh: {refresh_sec}s · {spinner[tick % len(spinner)]} Refreshing · Last: {data.timestamp}\033[0m\033[K"
-                    )
-                else:
-                    sys.stdout.write(
-                        f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data\033[0m\033[K"
-                    )
-                sys.stdout.flush()
+                if show_refresh:
+                    spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+                    if data.error and data.error != "session_dead":
+                        sys.stdout.write(
+                            f"\r  \033[2m{spinner[tick % len(spinner)]}\033[0m \033[31mClaude server error\033[0m \033[2m· Retrying\033[0m\033[K"
+                        )
+                    elif data.timestamp:
+                        sys.stdout.write(
+                            f"\r  \033[2mRefresh: {refresh_sec}s · {spinner[tick % len(spinner)]} Refreshing · Last: {data.timestamp}\033[0m\033[K"
+                        )
+                    else:
+                        sys.stdout.write(
+                            f"\r  \033[2m{spinner[tick % len(spinner)]} Loading usage data\033[0m\033[K"
+                        )
+                    sys.stdout.flush()
                 tick += 1
                 time.sleep(0.1)
 
