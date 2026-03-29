@@ -713,7 +713,7 @@ def make_pace_bar(pct, width=40):
     return f"{bar} \033[33m{pct:3d}% elapsed\033[0m"
 
 
-def display_help():
+def display_help(bar_width=DEFAULT_BAR_WIDTH):
     """Show key bindings help screen"""
     sys.stdout.write("\033[H\033[2J")
     print(f"  \033[1mClaude Simple Usage\033[0m")
@@ -721,7 +721,7 @@ def display_help():
     print(f"  \033[1mKeys\033[0m")
     print(f"  \033[2m{'r':12s}\033[0m immediate refresh")
     print(f"  \033[2m{'w/s':12s}\033[0m adjust refresh interval (w=+30s, s=-30s)")
-    print(f"  \033[2m{'a/d':12s}\033[0m adjust bar width (a=-5, d=+5)")
+    print(f"  \033[2m{'a/d':12s}\033[0m adjust bar width (a=-1, d=+1)  \033[2m[current: {bar_width}]\033[0m")
     print(f"  \033[2m{'`':12s}\033[0m toggle all details")
     print(f"  \033[2m{'1':12s}\033[0m toggle pace bar")
     print(f"  \033[2m{'2':12s}\033[0m toggle title & profile info")
@@ -1139,7 +1139,7 @@ def main():
     while True:
         if redraw:
             if show_help:
-                display_help()
+                display_help(bar_width)
             else:
                 display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
             redraw = False
@@ -1199,14 +1199,14 @@ def main():
                     elif key in ('h', 'H', '\x1b'):
                         show_help = not show_help
                         if show_help:
-                            display_help()
+                            display_help(bar_width)
                         else:
                             display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key in ('t', 'T'):
                         display_tmux_capture()
                         sys.stdin.read(1)
                         if show_help:
-                            display_help()
+                            display_help(bar_width)
                         else:
                             display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                     elif key == '!':
@@ -1319,7 +1319,7 @@ def main():
                         redraw_now = True
                     if redraw_now:
                         if show_help:
-                            display_help()
+                            display_help(bar_width)
                         else:
                             display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
                         redraw_now = False
