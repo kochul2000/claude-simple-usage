@@ -1107,6 +1107,12 @@ def main():
     sys.stdout.write("\033[?25l")
 
     data = UsageData()
+
+    # 공유 데이터가 있으면 즉시 로드 (빈 화면 방지)
+    shared = _read_shared_data()
+    if shared and shared.get('parse_success'):
+        data = _shared_to_usage(shared)
+
     bar_width = DEFAULT_BAR_WIDTH
     show_pace = init_pace
     show_profile = init_profile
@@ -1130,15 +1136,14 @@ def main():
             tty.setcbreak(sys.stdin.fileno())
 
             # Phase 1: Countdown (공유 next_query_at 기준 동기화)
-            if first_run:
-                first_run = False
-                shared = _read_shared_data()
-                if shared and shared.get('parse_success'):
-                    data = _shared_to_usage(shared)
-                    display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
-
             shared = _read_shared_data()
-            next_query_at = shared.get('next_query_at', 0) if shared else 0
+            if shared:
+                next_query_at = shared.get('next_query_at') or (shared.get('queried_at', 0) + refresh_sec)
+            elif first_run:
+                next_query_at = 0  # 최초 실행: 즉시 쿼리
+            else:
+                next_query_at = time.time() + refresh_sec
+            first_run = False
             force_refresh = False
             tick = 0
             while True:
