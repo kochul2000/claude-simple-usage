@@ -15,6 +15,7 @@ Usage:
     ccu --no-sonnet              # hide Sonnet weekly usage
     ccu --no-refresh             # start with refresh status hidden
     ccu --horizontal             # horizontal layout (side by side)
+    ccu --width 60               # set initial bar width (default: 40)
     ccu --debug                  # show raw tmux output
     ccu install                  # install ccu to ~/.local/bin
     ccu install --no-pace        # install with preset flags
@@ -23,7 +24,7 @@ Usage:
 Keys:
     r            immediate refresh
     w/s          adjust refresh interval (w=+30s, s=-30s)
-    a/d          adjust bar width (a=-5, d=+5)
+    a/d          adjust bar width (a=-1, d=+1)
     `            toggle all details
     1            toggle pace bar
     2            toggle title & profile info
@@ -66,7 +67,7 @@ REFRESH_STEP = 30
 DEFAULT_BAR_WIDTH = 40
 MIN_BAR_WIDTH = 15
 MAX_BAR_WIDTH = 200
-BAR_WIDTH_STEP = 5
+BAR_WIDTH_STEP = 1
 SESSION_HOURS = 5
 CLAUDE_STARTUP_WAIT = 12
 USAGE_RENDER_WAIT = 5
@@ -1016,6 +1017,7 @@ def main():
     init_sonnet = True
     init_refresh = True
     init_horizontal = False
+    init_bar_width = None
     args = sys.argv[1:]
 
     # Handle subcommands
@@ -1053,6 +1055,16 @@ def main():
             init_refresh = False
         elif arg in ("--horizontal", "--wide"):
             init_horizontal = True
+        elif arg in ("--width", "-w"):
+            if i + 1 >= len(args):
+                print(f"\033[31m{arg} requires a number argument\033[0m")
+                sys.exit(1)
+            i += 1
+            try:
+                init_bar_width = max(MIN_BAR_WIDTH, min(MAX_BAR_WIDTH, int(args[i])))
+            except ValueError:
+                print(f"\033[31mInvalid width: {args[i]}\033[0m")
+                sys.exit(1)
         elif arg.isdigit():
             refresh_sec = int(arg)
         i += 1
@@ -1113,7 +1125,7 @@ def main():
     if shared and shared.get('parse_success'):
         data = _shared_to_usage(shared)
 
-    bar_width = DEFAULT_BAR_WIDTH
+    bar_width = init_bar_width if init_bar_width is not None else DEFAULT_BAR_WIDTH
     show_pace = init_pace
     show_profile = init_profile
     show_sonnet = init_sonnet
