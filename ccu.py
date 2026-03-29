@@ -153,9 +153,10 @@ def _read_shared_data():
         return None
 
 
-def _write_shared_data(data):
+def _write_shared_data(data, next_query_at):
     d = {
         'queried_at': time.time(),
+        'next_query_at': next_query_at,
         'session_pct': data.session_pct,
         'session_reset': data.session_reset,
         'week_all_pct': data.week_all_pct,
@@ -488,31 +489,27 @@ def query_usage():
     return data
 
 
-def query_usage_shared(refresh_sec):
+def query_usage_shared(refresh_sec, force=False):
     """Query usage with inter-process coordination.
-    Uses file lock + shared data to prevent duplicate API queries
-    when multiple ccu instances share the same profile session.
+    All instances share next_query_at — only the first to arrive actually queries.
     """
-    shared = _read_shared_data()
-    if shared:
-        age = time.time() - shared.get('queried_at', 0)
-        threshold = refresh_sec * 0.9 if shared.get('parse_success') else PARSE_FAIL_REFRESH * 0.9
-        if age < threshold:
+    if not force:
+        shared = _read_shared_data()
+        if shared and shared.get('next_query_at', 0) > time.time():
             return _shared_to_usage(shared)
 
     lock_fd = open(_lock_file(), 'w')
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
-        shared = _read_shared_data()
-        if shared:
-            age = time.time() - shared.get('queried_at', 0)
-            threshold = refresh_sec * 0.9 if shared.get('parse_success') else PARSE_FAIL_REFRESH * 0.9
-            if age < threshold:
+        if not force:
+            shared = _read_shared_data()
+            if shared and shared.get('next_query_at', 0) > time.time():
                 return _shared_to_usage(shared)
 
         data = query_usage()
-        _write_shared_data(data)
+        next_at = time.time() + (refresh_sec if data.parse_success else PARSE_FAIL_REFRESH)
+        _write_shared_data(data, next_at)
         return data
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -1131,19 +1128,21 @@ def main():
         old_settings = termios.tcgetattr(sys.stdin)
         try:
             tty.setcbreak(sys.stdin.fileno())
-            start = time.time()
 
-            # Phase 1: Countdown (첫 실행은 즉시 fetch)
+            # Phase 1: Countdown (공유 next_query_at 기준 동기화)
             if first_run:
-                effective_refresh = 0
                 first_run = False
-            elif not data.parse_success:
-                effective_refresh = PARSE_FAIL_REFRESH
-            else:
-                effective_refresh = refresh_sec
+                shared = _read_shared_data()
+                if shared and shared.get('parse_success'):
+                    data = _shared_to_usage(shared)
+                    display(data, bar_width, show_pace, show_profile, show_sonnet, show_horizontal)
+
+            shared = _read_shared_data()
+            next_query_at = shared.get('next_query_at', 0) if shared else 0
+            force_refresh = False
             tick = 0
             while True:
-                remaining = effective_refresh - (time.time() - start)
+                remaining = next_query_at - time.time()
                 if remaining <= 0:
                     break
                 if select.select([sys.stdin], [], [], 0)[0]:
@@ -1204,6 +1203,7 @@ def main():
                         consecutive_failures = 0
                         break
                     elif key in ('r', 'R'):
+                        force_refresh = True
                         break
                     continue
                 if show_refresh:
@@ -1249,8 +1249,8 @@ def main():
 
             # Phase 2: Refresh in background thread
             result = [None]
-            def _bg_query(rs=refresh_sec):
-                result[0] = query_usage_shared(rs)
+            def _bg_query(rs=refresh_sec, force=force_refresh):
+                result[0] = query_usage_shared(rs, force=force)
             thread = threading.Thread(target=_bg_query, daemon=True)
             thread.start()
 
