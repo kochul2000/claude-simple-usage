@@ -52,10 +52,13 @@ import tty
 import select
 import threading
 import atexit
+import json
+import fcntl
+import hashlib
 from datetime import datetime, timedelta
 
 # ─── Configuration ───────────────────────────────────────────
-TMUX_SESSION = f"_ccu_bg_{os.getpid()}"
+TMUX_SESSION = None  # Set in main() based on profile
 DEFAULT_REFRESH = 600
 MIN_REFRESH = 600
 MAX_REFRESH = 1200
@@ -76,6 +79,127 @@ QUERY_TIMEOUT = 30
 DEBUG = False
 CONFIG_DIR = None
 ACCOUNT_INFO = {}  # {"account": ..., "plan": ...}
+
+
+# ─── Profile-based session sharing ──────────────────────────
+
+def _profile_key():
+    """Return a short deterministic key for the current profile (config dir)."""
+    path = CONFIG_DIR or os.path.join(os.path.expanduser("~"), ".claude")
+    return hashlib.md5(os.path.realpath(path).encode()).hexdigest()[:8]
+
+
+def _shared_dir():
+    d = f"/tmp/_ccu_{_profile_key()}"
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _pid_dir():
+    d = os.path.join(_shared_dir(), "pids")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _data_file():
+    return os.path.join(_shared_dir(), "data.json")
+
+
+def _lock_file():
+    return os.path.join(_shared_dir(), "query.lock")
+
+
+def _account_file():
+    return os.path.join(_shared_dir(), "account.json")
+
+
+def _register_pid():
+    with open(os.path.join(_pid_dir(), str(os.getpid())), 'w') as f:
+        f.write('')
+
+
+def _unregister_pid():
+    try:
+        os.unlink(os.path.join(_pid_dir(), str(os.getpid())))
+    except FileNotFoundError:
+        pass
+
+
+def _alive_pids():
+    """Return set of alive ccu PIDs using this profile's session."""
+    pids = set()
+    try:
+        entries = os.listdir(_pid_dir())
+    except FileNotFoundError:
+        return pids
+    for name in entries:
+        try:
+            pid = int(name)
+            os.kill(pid, 0)
+            pids.add(pid)
+        except (ValueError, OSError):
+            try:
+                os.unlink(os.path.join(_pid_dir(), name))
+            except FileNotFoundError:
+                pass
+    return pids
+
+
+def _read_shared_data():
+    try:
+        with open(_data_file(), 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _write_shared_data(data):
+    d = {
+        'queried_at': time.time(),
+        'session_pct': data.session_pct,
+        'session_reset': data.session_reset,
+        'week_all_pct': data.week_all_pct,
+        'week_all_reset': data.week_all_reset,
+        'week_sonnet_pct': data.week_sonnet_pct,
+        'raw': data.raw,
+        'timestamp': data.timestamp,
+        'error': data.error,
+        'parse_success': data.parse_success,
+    }
+    tmp = _data_file() + ".tmp"
+    with open(tmp, 'w') as f:
+        json.dump(d, f)
+    os.replace(tmp, _data_file())
+
+
+def _shared_to_usage(d):
+    data = UsageData()
+    data.session_pct = d.get('session_pct')
+    data.session_reset = d.get('session_reset')
+    data.week_all_pct = d.get('week_all_pct')
+    data.week_all_reset = d.get('week_all_reset')
+    data.week_sonnet_pct = d.get('week_sonnet_pct')
+    data.raw = d.get('raw', '')
+    data.timestamp = d.get('timestamp')
+    data.error = d.get('error')
+    data.parse_success = d.get('parse_success', False)
+    return data
+
+
+def _save_account_info():
+    if ACCOUNT_INFO:
+        tmp = _account_file() + ".tmp"
+        with open(tmp, 'w') as f:
+            json.dump(ACCOUNT_INFO, f)
+        os.replace(tmp, _account_file())
+
+
+def _load_account_info():
+    try:
+        with open(_account_file(), 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return {}
 
 
 class UsageData:
@@ -119,7 +243,7 @@ def is_session_alive():
 
 
 def cleanup_zombie_sessions():
-    """PID가 죽은 _ccu_bg_* 좀비 tmux 세션 정리"""
+    """등록된 PID가 모두 죽은 _ccu_bg_* 좀비 tmux 세션 정리"""
     r = subprocess.run(
         ["tmux", "list-sessions", "-F", "#{session_name}"],
         capture_output=True, text=True
@@ -130,22 +254,38 @@ def cleanup_zombie_sessions():
     for name in r.stdout.strip().split('\n'):
         if not name.startswith("_ccu_bg_"):
             continue
-        try:
-            pid = int(name.split("_")[-1])
-        except ValueError:
+        profile_hash = name[len("_ccu_bg_"):]
+        if TMUX_SESSION and name == TMUX_SESSION:
             continue
-        # 현재 프로세스의 세션은 건드리지 않음
-        if pid == os.getpid():
+        pid_dir = f"/tmp/_ccu_{profile_hash}/pids"
+        if not os.path.isdir(pid_dir):
+            subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+            shared_dir = f"/tmp/_ccu_{profile_hash}"
+            try:
+                shutil.rmtree(shared_dir)
+            except Exception:
+                pass
+            killed.append(name)
             continue
-        # PID가 살아있는지 확인
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            # 프로세스 없음 → 좀비 세션
-            subprocess.run(
-                ["tmux", "kill-session", "-t", name],
-                capture_output=True
-            )
+        any_alive = False
+        for pid_name in os.listdir(pid_dir):
+            try:
+                pid = int(pid_name)
+                os.kill(pid, 0)
+                any_alive = True
+                break
+            except (ValueError, OSError):
+                try:
+                    os.unlink(os.path.join(pid_dir, pid_name))
+                except FileNotFoundError:
+                    pass
+        if not any_alive:
+            subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+            shared_dir = f"/tmp/_ccu_{profile_hash}"
+            try:
+                shutil.rmtree(shared_dir)
+            except Exception:
+                pass
             killed.append(name)
     if killed:
         print(f"\033[2mCleaned up {len(killed)} orphaned session(s)\033[0m")
@@ -214,9 +354,14 @@ def setup_claude_session():
     # 큰 터미널 사이즈로 세션 생성 (TUI 렌더링을 위해)
     tmux("new-session", "-d", "-s", TMUX_SESSION, "-x", "200", "-y", "60")
 
-    # PID watchdog: ccu 프로세스가 죽으면 tmux 세션 자동 종료
-    pid = os.getpid()
-    watchdog = f"(while kill -0 {pid} 2>/dev/null; do sleep 5; done; tmux kill-session -t {TMUX_SESSION}) &"
+    # PID watchdog: 모든 ccu 프로세스가 죽으면 tmux 세션 자동 종료
+    pid_dir = _pid_dir()
+    watchdog = (
+        f'(while true; do sleep 10; a=0; '
+        f'for f in {pid_dir}/*; do '
+        f'[ -f "$f" ] && kill -0 "$(basename "$f")" 2>/dev/null && a=1 && break; '
+        f'done; [ "$a" = 0 ] && tmux kill-session -t {TMUX_SESSION} && break; done) &'
+    )
     tmux_send(watchdog, enter=True)
     time.sleep(0.3)
 
@@ -341,6 +486,37 @@ def query_usage():
         data.error = str(e)
 
     return data
+
+
+def query_usage_shared(refresh_sec):
+    """Query usage with inter-process coordination.
+    Uses file lock + shared data to prevent duplicate API queries
+    when multiple ccu instances share the same profile session.
+    """
+    shared = _read_shared_data()
+    if shared:
+        age = time.time() - shared.get('queried_at', 0)
+        threshold = refresh_sec * 0.9 if shared.get('parse_success') else PARSE_FAIL_REFRESH * 0.9
+        if age < threshold:
+            return _shared_to_usage(shared)
+
+    lock_fd = open(_lock_file(), 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        shared = _read_shared_data()
+        if shared:
+            age = time.time() - shared.get('queried_at', 0)
+            threshold = refresh_sec * 0.9 if shared.get('parse_success') else PARSE_FAIL_REFRESH * 0.9
+            if age < threshold:
+                return _shared_to_usage(shared)
+
+        data = query_usage()
+        _write_shared_data(data)
+        return data
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
 
 
 def parse_usage(text, data):
@@ -757,17 +933,27 @@ def cleanup(sig=None, frame=None):
                           termios.tcgetattr(sys.stdin))
     except Exception:
         pass
-    print(f"\n\033[33mClosing background tmux session ({TMUX_SESSION})...\033[0m")
 
-    try:
-        if is_session_alive():
-            tmux_send("/exit", enter=True)
-            time.sleep(1)
-            tmux("kill-session", "-t", TMUX_SESSION)
-    except Exception:
-        pass
+    _unregister_pid()
+    remaining = _alive_pids()
 
-    print("\033[32mDone\033[0m")
+    if not remaining:
+        print(f"\n\033[33mClosing shared session ({TMUX_SESSION})...\033[0m")
+        try:
+            if is_session_alive():
+                tmux_send("/exit", enter=True)
+                time.sleep(1)
+                tmux("kill-session", "-t", TMUX_SESSION)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(_shared_dir())
+        except Exception:
+            pass
+        print("\033[32mDone\033[0m")
+    else:
+        print(f"\n\033[33mDetached ({len(remaining)} instance(s) still active)\033[0m")
+
     if sig is not None:
         sys.exit(0)
 
@@ -824,7 +1010,7 @@ def do_uninstall():
 
 
 def main():
-    global DEBUG, CONFIG_DIR
+    global DEBUG, CONFIG_DIR, TMUX_SESSION
 
     # ── Parse args ──
     refresh_sec = DEFAULT_REFRESH
@@ -875,11 +1061,13 @@ def main():
         i += 1
 
     # ── Setup ──
+    TMUX_SESSION = f"_ccu_bg_{_profile_key()}"
     check_dependencies()
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
     atexit.register(cleanup)
     cleanup_zombie_sessions()
+    _register_pid()
 
     print("\033[1mClaude Simple Usage\033[0m")
     opts = [f"refresh={refresh_sec}s"]
@@ -900,7 +1088,12 @@ def main():
     print(f"  \033[2m{' | '.join(opts)}\033[0m")
     print()
 
-    setup_claude_session()
+    if is_session_alive():
+        print(f"Reusing shared session ({TMUX_SESSION})")
+        ACCOUNT_INFO.update(_load_account_info())
+    else:
+        setup_claude_session()
+        _save_account_info()
 
     if DEBUG:
         print()
@@ -1007,6 +1200,7 @@ def main():
                             tmux("kill-session", "-t", TMUX_SESSION)
                             time.sleep(0.5)
                         setup_claude_session()
+                        _save_account_info()
                         consecutive_failures = 0
                         break
                     elif key in ('r', 'R'):
@@ -1050,12 +1244,13 @@ def main():
                     tmux("kill-session", "-t", TMUX_SESSION)
                     time.sleep(0.5)
                 setup_claude_session()
+                _save_account_info()
                 consecutive_failures = 0
 
             # Phase 2: Refresh in background thread
             result = [None]
-            def _bg_query():
-                result[0] = query_usage()
+            def _bg_query(rs=refresh_sec):
+                result[0] = query_usage_shared(rs)
             thread = threading.Thread(target=_bg_query, daemon=True)
             thread.start()
 
@@ -1142,6 +1337,7 @@ def main():
                     tmux("kill-session", "-t", TMUX_SESSION)
                     time.sleep(0.5)
                 setup_claude_session()
+                _save_account_info()
                 consecutive_failures = 0
             elif qdata is not None and qdata.error and "session_dead" not in qdata.error:
                 # 서버 에러 (e.g. "Failed to load usage data") → 세션 재시작 무의미
