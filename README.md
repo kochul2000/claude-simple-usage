@@ -70,9 +70,14 @@ ccu                            # refresh every 600s (default)
 ccu 900                        # refresh every 900s
 ccu -d ~/.claude               # use specific config directory
 ccu --config-dir ~/.claude     # (same, long form)
+ccu -w 60                      # set initial bar width (default: 40)
+ccu --width 60                 # (same, long form)
 ccu --no-pace                  # start with pace bar hidden
 ccu --no-profile               # start with profile info hidden
 ccu --no-sonnet                # hide Sonnet weekly usage
+ccu --no-refresh               # start with refresh status hidden
+ccu --horizontal               # start with horizontal (side-by-side) layout
+ccu --wide                     # (same as --horizontal)
 ccu --debug                    # show raw tmux output
 ccu install                    # install ccu to ~/.local/bin
 ccu install --no-pace          # install with preset flags
@@ -85,11 +90,15 @@ ccu uninstall                  # remove ccu from ~/.local/bin
 |---|---|
 | `r` | Immediate refresh |
 | `w` / `s` | Adjust refresh interval (w=+30s, s=-30s, 600s–1200s) |
-| `a` / `d` | Adjust bar width (a=-5, d=+5) |
+| `a` / `d` | Adjust bar width (a=-1, d=+1) |
+| `e` | Toggle horizontal (side-by-side) layout |
 | `` ` `` | Toggle all details on/off |
 | `1` | Toggle pace bar |
 | `2` | Toggle profile info |
 | `3` | Toggle sonnet weekly |
+| `4` | Toggle refresh status |
+| `t` | Show tmux pane capture (debug) |
+| `!` | Force restart Claude session |
 | `h` / `ESC` | Toggle help |
 | `Ctrl+C` | Exit |
 
